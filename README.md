@@ -41,6 +41,34 @@ uv sync --extra sensors --extra franka_panda
 uv run robots_realtime/envs/launch.py --config_path configs/franka_viser_osc.yaml
 ```
 
+## VR Teleoperation (Pico)
+
+Control bimanual YAM arms using Pico VR controllers via [XRoboToolkit](https://github.com/XR-Robotics/XRoboToolkit-PC-Service).
+
+### Prerequisites
+1. Download and run [XRoboToolkit PC Service](https://github.com/XR-Robotics/XRoboToolkit-PC-Service) on your PC.
+2. Connect your Pico headset and verify poses are streaming in the PC Service app.
+
+### Install XRoboToolkit SDK
+```bash
+source .venv/bin/activate
+bash scripts/install_xrobotoolkit_sdk.sh
+```
+
+### Launch VR Teleop
+```bash
+uv run robots_realtime/envs/launch.py --config_path configs/yam_vr_bimanual.yaml
+```
+
+### Controls
+| Button | Function |
+|---|---|
+| **Grip** (hold) | Activate arm control — arm follows hand movement |
+| **Grip** (release) | Freeze arm — re-grip to continue from new position |
+| **Trigger** | Gripper control (0 = open, fully pressed = closed) |
+
+The Viser web UI is still active during VR teleop for monitoring the robot state.
+
 ## Extending with Custom Agents
 To integrate your own controller or policy:
 
