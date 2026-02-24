@@ -1,4 +1,5 @@
 import pickle
+import signal
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional
@@ -226,7 +227,7 @@ def launch_remote_server(
         port = portal.free_port()
 
     def _launch() -> None:
-        # setup_logging(logging_config_path)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         obj = instantiate(cfg)
         assert port is not None
         remote_server = RemoteServer(obj, port, host, custom_remote_methods=custom_remote_methods)

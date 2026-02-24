@@ -134,14 +134,14 @@ def _make_ik_table(agent, action, step: int) -> Table:
 
 def test_with_ik() -> None:
     """Run VR teleop with IK solving and Viser visualization, but no real robot."""
-    from robots_realtime.agents.teleoperation.yam_pyroki_vr_agent import YamPyrokiVrAgent
+    from robots_realtime.agents.teleoperation.yam_vr_agent import YamVrAgent
     from robots_realtime.robots.robot import PrintRobot
 
     print("=== VR Teleop Test with IK (no real robot) ===")
     print("Open http://localhost:8080 in browser to see Viser visualization.")
     print("Squeeze grip to activate arm, move hand, squeeze trigger for gripper.\n")
 
-    agent = YamPyrokiVrAgent(
+    agent = YamVrAgent(
         bimanual=True,
         right_arm_extrinsic={"position": [0.0, -0.61, 0.0], "rotation": [1.0, 0.0, 0.0, 0.0]},
         scale_factor=1.5,

@@ -1,7 +1,11 @@
 """
 VR teleoperation agent for bimanual YAM arms using Pico VR controllers.
 Replaces the Viser gizmo input with VR controller poses while reusing
-the YamPyroki IK solver and Viser visualization.
+the IK solver and Viser visualization.
+
+IK backend is selectable via the ``ik_solver`` parameter:
+  - "pink" (default)   -- Pinocchio QP differential IK (requires pin-pink)
+  - "pyroki"           -- JAX-based global IK, no extra deps
 
 Requires:
   - XRoboToolkit PC Service running on the PC
@@ -21,7 +25,7 @@ import viser.transforms as vtf
 from dm_env.specs import Array
 
 from robots_realtime.agents.agent import Agent
-from robots_realtime.robots.inverse_kinematics.yam_pyroki import YamPyroki
+from robots_realtime.agents.teleoperation.yam_viser_agent import _create_ik_solver
 from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
 from robots_realtime.utils.portal_utils import remote
 from robots_realtime.utils.xr_client import XrClient
@@ -40,13 +44,15 @@ YAM_GRIPPER_OPEN = 0.0
 YAM_GRIPPER_CLOSED = 2.4
 
 
-class YamPyrokiVrAgent(Agent):
+class YamVrAgent(Agent):
     def __init__(
         self,
         bimanual: bool = False,
         right_arm_extrinsic: Optional[Dict[str, Any]] = None,
         scale_factor: float = 1.5,
         R_vr_to_robot: Optional[np.ndarray] = None,
+        ik_solver: str = "pink",
+        ik_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.bimanual = bimanual
         self.right_arm_extrinsic = right_arm_extrinsic
@@ -58,7 +64,7 @@ class YamPyrokiVrAgent(Agent):
             assert right_arm_extrinsic is not None, "right_arm_extrinsic must be provided for bimanual robot"
 
         self.viser_server = viser.ViserServer()
-        self.ik = YamPyroki(viser_server=self.viser_server, bimanual=bimanual)
+        self.ik = _create_ik_solver(ik_solver, ik_params=ik_params, viser_server=self.viser_server, bimanual=bimanual)
 
         # VR state tracking per arm
         self.sides = ["left", "right"] if bimanual else ["left"]

@@ -4,10 +4,13 @@ Main launch script for YAM realtime robot control environment.
 
 import logging
 import os
+import signal
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
+import numpy as np
 import tyro
 
 from robots_realtime.agents.agent import Agent
@@ -27,6 +30,24 @@ from robots_realtime.utils.launch_utils import (
     run_server_proc,
 )
 
+SAFE_MOVE_DURATION_S = 1.0
+IK_WARMUP_TIMEOUT_S = 15.0
+IK_WARMUP_POLL_S = 0.1
+
+_shutdown_requested = False
+
+
+def _sigint_handler(signum, frame):
+    """Handle SIGINT by setting a flag instead of raising KeyboardInterrupt.
+
+    This prevents the signal from propagating to Portal child processes
+    and killing robot servers before we can do a safe shutdown.
+    """
+    global _shutdown_requested
+    if _shutdown_requested:
+        raise KeyboardInterrupt
+    _shutdown_requested = True
+
 
 @dataclass
 class LaunchConfig:
@@ -43,6 +64,117 @@ class Args:
     config_path: Tuple[str, ...] = ("~/yam_realtime/configs/yam_viser_bimanual.yaml",)
 
 
+def _save_robot_positions(obs: Dict[str, Any], robot_names: list) -> Dict[str, np.ndarray]:
+    """Capture current joint positions (arm + gripper) from observations."""
+    saved = {}
+    for name in robot_names:
+        if name not in obs:
+            continue
+        joint_pos = obs[name].get("joint_pos", np.array([]))
+        gripper_pos = obs[name].get("gripper_pos", np.array([]))
+        if joint_pos.size > 0:
+            saved[name] = np.concatenate([joint_pos, gripper_pos]) if gripper_pos.size > 0 else joint_pos.copy()
+    return saved
+
+
+def _wait_for_ik_convergence(
+    agent: Agent,
+    obs: Dict[str, Any],
+    robot_names: list,
+    logger: logging.Logger,
+) -> Dict[str, Any]:
+    """Poll agent.act() until the IK solver has produced a non-zero solution.
+
+    On first call the JAX JIT in pyroki can take several seconds to compile.
+    We keep polling so that the returned action contains the real IK target,
+    not the initial zeros.
+    """
+    logger.info("Waiting for IK solver to warm up (JIT compile + first solve)...")
+    deadline = time.time() + IK_WARMUP_TIMEOUT_S
+
+    while time.time() < deadline:
+        action = agent.act(obs)
+        all_converged = True
+        for name in robot_names:
+            if name not in action or "pos" not in action[name]:
+                all_converged = False
+                break
+            arm_joints = action[name]["pos"][:-1]
+            if np.allclose(arm_joints, 0.0, atol=1e-4):
+                all_converged = False
+                break
+        if all_converged:
+            logger.info("IK solver warmed up and converged.")
+            return action
+        time.sleep(IK_WARMUP_POLL_S)
+
+    logger.warning(f"IK solver did not converge within {IK_WARMUP_TIMEOUT_S}s, proceeding with current values.")
+    return agent.act(obs)
+
+
+def _safe_move_robots(
+    robots: Dict[str, Robot],
+    targets: Dict[str, np.ndarray],
+    duration_s: float = SAFE_MOVE_DURATION_S,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Slowly move robots to target joint positions using linear interpolation.
+
+    All arms move simultaneously via threads (move_joints is a blocking RPC).
+    """
+
+    def _move_one(name: str, robot: Robot, target: np.ndarray) -> None:
+        try:
+            if logger:
+                logger.info(f"Slowly moving '{name}' to target over {duration_s:.1f}s...")
+            robot.move_joints(target, duration_s)
+        except Exception as e:
+            if logger:
+                logger.warning(f"Could not slowly move '{name}': {e}")
+
+    threads = []
+    for name, robot in robots.items():
+        if name not in targets:
+            continue
+        t = threading.Thread(target=_move_one, args=(name, robot, np.array(targets[name])), daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=duration_s + 2.0)
+
+
+SOFT_RELEASE_DURATION_S = 2.0
+
+
+def _safe_release_robots(
+    robots: Dict[str, Robot],
+    duration_s: float = SOFT_RELEASE_DURATION_S,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Gradually fade gravity compensation then cut power on all robots."""
+
+    def _release_one(name: str, robot: Robot) -> None:
+        try:
+            robot.soft_release(duration_s)
+            if logger:
+                logger.info(f"Soft-released '{name}' over {duration_s:.1f}s")
+        except Exception as e:
+            if logger:
+                logger.warning(f"soft_release failed for '{name}', falling back to zero_torque_mode: {e}")
+            try:
+                robot.zero_torque_mode()
+            except Exception:
+                pass
+
+    threads = []
+    for name, robot in robots.items():
+        t = threading.Thread(target=_release_one, args=(name, robot), daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=duration_s + 2.0)
+
+
 def main(args: Args) -> None:
     """
     Main launch entrypoint.
@@ -53,14 +185,24 @@ def main(args: Args) -> None:
     4. Initialize robots (hardware interface)
     5. Initialize agent (e.g. teleoperated control, policy control, etc.)
     6. Create environment
-    7. Run control loop
+    7. Wait for IK solver to converge
+    8. Slowly move to initial pose
+    9. Run control loop (exits on SIGINT flag)
+    10. On exit, slowly return to pre-teleop pose and release motors
     """
+    global _shutdown_requested
 
-    # Setup logging and get logger
     logger = setup_logging()
     logger.info("Starting realtime control system...")
 
     server_processes = []
+    saved_positions: Dict[str, np.ndarray] = {}
+    robots: Dict[str, Robot] = {}
+
+    # Install SIGINT handler BEFORE creating child processes so that
+    # Ctrl+C sets a flag instead of killing Portal robot servers.
+    original_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _sigint_handler)
 
     try:
         logger.info("Loading configuration...")
@@ -99,47 +241,75 @@ def main(args: Args) -> None:
             control_rate_hz=rate,
         )
 
+        # --- Safe startup ---
+        obs = env.reset()
+        saved_positions = _save_robot_positions(obs, list(robots.keys()))
+        logger.info(f"Saved pre-teleop positions for: {list(saved_positions.keys())}")
+        logger.info(f"Action spec: {env.action_spec()}")
+
+        # Wait for the IK solver to JIT-compile and converge before reading
+        # the initial target.  Without this, pyroki returns np.zeros(6).
+        initial_action = _wait_for_ik_convergence(agent, obs, list(robots.keys()), logger)
+
+        initial_targets = {}
+        for name in robots:
+            if name in initial_action and "pos" in initial_action[name]:
+                initial_targets[name] = initial_action[name]["pos"]
+
+        if initial_targets:
+            logger.info("Moving to initial teleop pose (safe slow motion)...")
+            _safe_move_robots(robots, initial_targets, logger=logger)
+
         logger.info("Starting control loop...")
         _run_control_loop(env, agent, main_config)
 
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received, initiating safe shutdown...")
     except Exception as e:
         logger.error(f"Error during execution: {e}")
         raise e
     finally:
-        # Cleanup
         logger.info("Shutting down...")
+
+        # Safe shutdown: return to pre-teleop positions and release motors.
+        # Robot server processes are still alive because our SIGINT handler
+        # prevented the signal from killing them.
+        if saved_positions and robots:
+            try:
+                logger.info("Returning to pre-teleop positions (safe slow motion)...")
+                _safe_move_robots(robots, saved_positions, logger=logger)
+                _safe_release_robots(robots, logger=logger)
+            except KeyboardInterrupt:
+                logger.warning("Shutdown interrupted, cutting power immediately...")
+                for name, robot in robots.items():
+                    try:
+                        robot.zero_torque_mode()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Error during safe shutdown: {e}")
+
         if "env" in locals():
             env.close()
         if "agent" in locals():
             cleanup_processes(agent, server_processes)
 
+        signal.signal(signal.SIGINT, original_sigint)
+
 
 def _run_control_loop(env: RobotEnv, agent: Agent, config: LaunchConfig) -> None:
-    """
-    Run the main control loop.
-
-    Args:
-        env: Robot environment
-        agent: Agent instance
-        config: Configuration object
-    """
+    """Run the main control loop.  Exits when _shutdown_requested is set by SIGINT."""
     logger = logging.getLogger(__name__)
     steps = 0
     start_time = time.time()
     loop_count = 0
 
-    # Init environment and warm up agent
     obs = env.reset()
-    logger.info(f"Action spec: {env.action_spec()}")
-    agent.act(obs)
 
-    # Main control loop
-    while True:
-        # Get action from agent
+    while not _shutdown_requested:
         with Timeout(30, "Agent action"):
             action = agent.act(obs)
 
-        # Execute action in environment
         with Timeout(1, "Env step", "warning"):
             obs = env.step(action)
 
@@ -156,6 +326,9 @@ def _run_control_loop(env: RobotEnv, agent: Agent, config: LaunchConfig) -> None
         if config.max_steps is not None and steps >= config.max_steps:
             logger.info(f"Reached max steps ({config.max_steps}), stopping...")
             break
+
+    if _shutdown_requested:
+        logger.info("Shutdown flag detected, exiting control loop.")
 
 
 if __name__ == "__main__":
