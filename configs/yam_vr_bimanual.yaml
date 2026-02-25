@@ -26,7 +26,10 @@ agent:
   right_arm_extrinsic:
       position: [0.0, -0.61, 0.0]
       rotation: [1.0, 0.0, 0.0, 0.0]
-  scale_factor: 1.0
+  scale_factor: 1.5
+  rotation_scale_factor: 1.5    # orientation amplification (1.0 = 1:1 with VR controller)
+  initial_ee_position: [0.25, 0.0, 0.1]              # [x_fwd, y_left, z_up] in arm base frame
+  initial_ee_rpy: [3.14159, 0.0, 1.5708]              # pointing front (original default)
 
 station_metadata:
   world_frame: "left_arm" # front x, left y, up z

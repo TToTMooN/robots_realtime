@@ -11,12 +11,16 @@ Requires:
   - XRoboToolkit PC Service running on the PC
   - xrobotoolkit_sdk installed (bash scripts/install_xrobotoolkit_sdk.sh)
   - Pico headset connected and streaming
+
+VR controller button mapping:
+  - A / X  : Reset corresponding arm to initial EE pose (task space)
 """
 
+import logging
 import threading
 import time
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import viser
@@ -29,6 +33,8 @@ from robots_realtime.agents.teleoperation.yam_viser_agent import _create_ik_solv
 from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
 from robots_realtime.utils.portal_utils import remote
 from robots_realtime.utils.xr_client import XrClient
+
+logger = logging.getLogger(__name__)
 
 # Default VR-to-robot frame rotation.
 # Maps VR headset frame (x=right, y=up, z=back) to robot base frame (x=forward, y=left, z=up).
@@ -43,6 +49,50 @@ GRIP_ACTIVATION_THRESHOLD = 0.9
 YAM_GRIPPER_OPEN = 0.0
 YAM_GRIPPER_CLOSED = 2.4
 
+# Default initial EE pose (same as the original "pointing front" in the IK solvers).
+# Adjust via the YAML config (initial_ee_position / initial_ee_rpy) once you find
+# a good pose using the Viser gizmo.
+DEFAULT_INITIAL_EE_POSITION = [0.25, 0.0, 0.26]
+DEFAULT_INITIAL_EE_RPY = [np.pi / 2, 0.0, np.pi / 2]
+
+RESET_DURATION_S = 1.5
+
+
+def _quat_slerp(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical linear interpolation between two unit quaternions (wxyz)."""
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = min(dot, 1.0)
+    if dot > 0.9995:
+        result = q0 + t * (q1 - q0)
+        return result / np.linalg.norm(result)
+    theta = np.arccos(dot)
+    sin_theta = np.sin(theta)
+    return (np.sin((1.0 - t) * theta) / sin_theta) * q0 + (np.sin(t * theta) / sin_theta) * q1
+
+
+def _smoothstep(t: float) -> float:
+    """Hermite smoothstep: zero velocity at t=0 and t=1."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _scale_rotation(delta_rot: vtf.SO3, scale: float) -> vtf.SO3:
+    """Amplify (or dampen) a rotation delta via axis-angle scaling."""
+    wxyz = delta_rot.wxyz
+    w = float(wxyz[0])
+    xyz = np.asarray(wxyz[1:], dtype=np.float64)
+    angle = 2.0 * np.arccos(np.clip(w, -1.0, 1.0))
+    if angle < 1e-8:
+        return delta_rot
+    axis = xyz / np.sin(angle / 2.0)
+    scaled_angle = angle * scale
+    w_new = np.cos(scaled_angle / 2.0)
+    xyz_new = axis * np.sin(scaled_angle / 2.0)
+    return vtf.SO3(np.array([w_new, *xyz_new]))
+
 
 class YamVrAgent(Agent):
     def __init__(
@@ -50,15 +100,23 @@ class YamVrAgent(Agent):
         bimanual: bool = False,
         right_arm_extrinsic: Optional[Dict[str, Any]] = None,
         scale_factor: float = 1.5,
+        rotation_scale_factor: float = 1.5,
         R_vr_to_robot: Optional[np.ndarray] = None,
         ik_solver: str = "pink",
         ik_params: Optional[Dict[str, Any]] = None,
+        initial_ee_position: Optional[List[float]] = None,
+        initial_ee_rpy: Optional[List[float]] = None,
     ) -> None:
         self.bimanual = bimanual
         self.right_arm_extrinsic = right_arm_extrinsic
         self.scale_factor = scale_factor
+        self.rotation_scale_factor = rotation_scale_factor
         self.R_vr_to_robot = R_vr_to_robot if R_vr_to_robot is not None else R_VR_TO_ROBOT_DEFAULT
         self.R_vr_so3 = vtf.SO3.from_matrix(self.R_vr_to_robot)
+
+        self.initial_ee_position = tuple(initial_ee_position or DEFAULT_INITIAL_EE_POSITION)
+        self.initial_ee_rpy = tuple(initial_ee_rpy or DEFAULT_INITIAL_EE_RPY)
+        self.initial_ee_wxyz = vtf.SO3.from_rpy_radians(*self.initial_ee_rpy).wxyz
 
         if bimanual:
             assert right_arm_extrinsic is not None, "right_arm_extrinsic must be provided for bimanual robot"
@@ -75,11 +133,21 @@ class YamVrAgent(Agent):
         self.gripper_value: Dict[str, float] = {s: YAM_GRIPPER_OPEN for s in self.sides}
         self.active: Dict[str, bool] = {s: False for s in self.sides}
 
+        # Button debounce state (per-side: X for left controller, A for right controller)
+        self._reset_btn_prev: Dict[str, bool] = {"left": False, "right": False}
+        # Smooth-reset interpolation state (populated when A/X triggers a reset)
+        self._reset_t0: Dict[str, Optional[float]] = {s: None for s in self.sides}
+        self._reset_start_pos: Dict[str, Optional[np.ndarray]] = {s: None for s in self.sides}
+        self._reset_start_wxyz: Dict[str, Optional[np.ndarray]] = {s: None for s in self.sides}
+
         self.xr_client = XrClient()
 
         # Setup visualization before starting threads that depend on GUI handles
         self.obs = None
         self._setup_visualization()
+
+        # Override IK solver's default EE pose with our configured initial pose
+        self._set_initial_pose()
 
         # Start IK solver thread
         self.ik_thread = threading.Thread(target=self.ik.run, daemon=True)
@@ -135,6 +203,80 @@ class YamVrAgent(Agent):
             )
         self.viser_cam_img_handles: Dict[str, Any] = {}
 
+    def _set_initial_pose(self) -> None:
+        """Immediately set IK targets to the configured initial EE pose (startup only).
+
+        Safe because launch.py uses _safe_move_robots() to slowly interpolate
+        the physical robot to the resulting IK solution before the control loop starts.
+        """
+        for side in self.sides:
+            handle = self.ik.transform_handles[side]
+            if handle.control is not None:
+                handle.control.position = self.initial_ee_position
+                handle.control.wxyz = self.initial_ee_wxyz
+            self.ref_vr_pos[side] = None
+            self.ref_vr_rot[side] = None
+            self.ref_ee_pos[side] = None
+            self.ref_ee_rot[side] = None
+            self.active[side] = False
+        logger.info("Set initial EE pose: pos=%s rpy=%s", self.initial_ee_position, self.initial_ee_rpy)
+
+    def _begin_smooth_reset(self, side: str) -> None:
+        """Start a smooth interpolation of the IK target back to the initial pose.
+
+        The VR processing loop will drive the interpolation forward each tick
+        over RESET_DURATION_S seconds, blocking VR input for this arm until done.
+        """
+        handle = self.ik.transform_handles[side]
+        if handle.control is not None:
+            self._reset_start_pos[side] = np.array(handle.control.position)
+            self._reset_start_wxyz[side] = np.array(handle.control.wxyz)
+        self._reset_t0[side] = time.time()
+        self.ref_vr_pos[side] = None
+        self.ref_vr_rot[side] = None
+        self.ref_ee_pos[side] = None
+        self.ref_ee_rot[side] = None
+        self.active[side] = False
+        logger.info("Smooth reset started for %s arm (%.1fs)", side, RESET_DURATION_S)
+
+    def _tick_smooth_reset(self, side: str) -> bool:
+        """Advance the smooth-reset interpolation for one arm.
+
+        Returns True if the reset is still in progress (caller should skip VR input).
+        """
+        t0 = self._reset_t0[side]
+        if t0 is None:
+            return False
+
+        alpha = (time.time() - t0) / RESET_DURATION_S
+        finished = alpha >= 1.0
+        s = _smoothstep(min(alpha, 1.0))
+
+        start_pos = self._reset_start_pos[side]
+        start_wxyz = self._reset_start_wxyz[side]
+        target_pos = np.array(self.initial_ee_position)
+        target_wxyz = np.array(self.initial_ee_wxyz)
+
+        if start_pos is not None and start_wxyz is not None:
+            pos = start_pos * (1.0 - s) + target_pos * s
+            wxyz = _quat_slerp(start_wxyz, target_wxyz, s)
+
+            handle = self.ik.transform_handles[side]
+            if handle.control is not None:
+                handle.control.position = tuple(pos)
+                handle.control.wxyz = tuple(wxyz)  # type: ignore
+
+        self.vr_status_handles[side].value = f"resetting... {min(alpha, 1.0) * 100:.0f}%"
+
+        if finished:
+            self._reset_t0[side] = None
+            self._reset_start_pos[side] = None
+            self._reset_start_wxyz[side] = None
+            self.vr_status_handles[side].value = "inactive"
+            logger.info("Smooth reset complete for %s arm", side)
+
+        return not finished
+
     def _transform_vr_pose(self, vr_pose: np.ndarray) -> tuple[np.ndarray, vtf.SO3]:
         """Transform a VR controller pose from VR frame to robot base frame.
 
@@ -152,13 +294,35 @@ class YamVrAgent(Agent):
 
         return pos_robot, rot_robot
 
+    def _handle_buttons(self) -> None:
+        """Check VR controller buttons and dispatch actions.
+
+        X (left controller, rising edge):  smooth-reset LEFT arm to initial EE pose.
+        A (right controller, rising edge): smooth-reset RIGHT arm to initial EE pose.
+        """
+        # A/B are on the right controller, X/Y are on the left controller.
+        button_to_side = {"left": self.xr_client.get_button("X"), "right": self.xr_client.get_button("A")}
+
+        for side in self.sides:
+            pressed = button_to_side[side]
+            if pressed and not self._reset_btn_prev[side]:
+                self._begin_smooth_reset(side)
+            self._reset_btn_prev[side] = pressed
+
     def _vr_processing_loop(self) -> None:
         """Read VR controller input and update IK targets at ~100Hz."""
         while True:
+            self._handle_buttons()
+
             for side in self.sides:
+                # If a smooth reset is in progress, drive the interpolation
+                # and skip VR input until it finishes.
+                if self._tick_smooth_reset(side):
+                    continue
+
                 grip_val = self.xr_client.get_grip(side)
                 trigger_val = self.xr_client.get_trigger(side)
-                self.gripper_value[side] = trigger_val * YAM_GRIPPER_CLOSED
+                self.gripper_value[side] = (1.0 - trigger_val) * YAM_GRIPPER_CLOSED
 
                 was_active = self.active[side]
                 is_active = grip_val > GRIP_ACTIVATION_THRESHOLD
@@ -187,6 +351,8 @@ class YamVrAgent(Agent):
 
                     delta_pos = (pos_robot - ref_vr_pos) * self.scale_factor
                     delta_rot = rot_robot @ ref_vr_rot.inverse()
+                    if self.rotation_scale_factor != 1.0:
+                        delta_rot = _scale_rotation(delta_rot, self.rotation_scale_factor)
 
                     new_pos = ref_ee_pos + delta_pos
                     new_rot = delta_rot @ ref_ee_rot

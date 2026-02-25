@@ -83,32 +83,52 @@ def _wait_for_ik_convergence(
     robot_names: list,
     logger: logging.Logger,
 ) -> Dict[str, Any]:
-    """Poll agent.act() until the IK solver has produced a non-zero solution.
+    """Poll agent.act() until the IK solver has fully converged.
+
+    Convergence requires two conditions:
+      1. All arm joints are non-zero (IK has started producing output).
+      2. Consecutive readings are close (joints have stabilized).
 
     On first call the JAX JIT in pyroki can take several seconds to compile.
-    We keep polling so that the returned action contains the real IK target,
-    not the initial zeros.
     """
-    logger.info("Waiting for IK solver to warm up (JIT compile + first solve)...")
+    logger.info("Waiting for IK solver to warm up and converge...")
     deadline = time.time() + IK_WARMUP_TIMEOUT_S
+    prev_joints: Dict[str, np.ndarray] = {}
+    stable_count = 0
+    STABLE_THRESHOLD = 5  # consecutive stable readings required
 
     while time.time() < deadline:
         action = agent.act(obs)
-        all_converged = True
+
+        all_nonzero = True
+        all_stable = True
         for name in robot_names:
             if name not in action or "pos" not in action[name]:
-                all_converged = False
+                all_nonzero = False
                 break
             arm_joints = action[name]["pos"][:-1]
             if np.allclose(arm_joints, 0.0, atol=1e-4):
-                all_converged = False
+                all_nonzero = False
                 break
-        if all_converged:
-            logger.info("IK solver warmed up and converged.")
+            if name in prev_joints:
+                if not np.allclose(arm_joints, prev_joints[name], atol=1e-3):
+                    all_stable = False
+            else:
+                all_stable = False
+            prev_joints[name] = arm_joints.copy()
+
+        if all_nonzero and all_stable:
+            stable_count += 1
+        else:
+            stable_count = 0
+
+        if stable_count >= STABLE_THRESHOLD:
+            logger.info("IK solver converged (joints stabilized).")
             return action
+
         time.sleep(IK_WARMUP_POLL_S)
 
-    logger.warning(f"IK solver did not converge within {IK_WARMUP_TIMEOUT_S}s, proceeding with current values.")
+    logger.warning(f"IK solver did not fully converge within {IK_WARMUP_TIMEOUT_S}s, proceeding with current values.")
     return agent.act(obs)
 
 
