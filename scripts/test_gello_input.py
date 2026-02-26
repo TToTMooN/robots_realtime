@@ -2,24 +2,28 @@
 Standalone GELLO (Dynamixel) input diagnostic — no robot hardware needed.
 
 Tests:
-  1. Dynamixel USB serial connection
+  1. Dynamixel USB serial connection (or network via --host)
   2. Joint position reading from all servos
   3. Sign-corrected angles for left/right arms
   4. (Optional) Full agent loop with PrintRobot (no real YAM)
 
 Usage:
-  # Just print raw Dynamixel positions (default: bimanual, /dev/ttyUSB0):
+  # Raw positions via direct USB (default: bimanual, /dev/ttyUSB0):
   uv run scripts/test_gello_input.py
+
+  # Raw positions via network (R1 Lite Teleop over Ethernet):
+  uv run scripts/test_gello_input.py --host 10.42.0.1
 
   # Single arm, custom port:
   uv run scripts/test_gello_input.py --port /dev/r1litet_usb --single-arm
 
   # Full agent loop with fake follower robot (no real YAM):
   uv run scripts/test_gello_input.py --with-agent
+  uv run scripts/test_gello_input.py --with-agent --host 10.42.0.1
 
 Prerequisites:
-  - R1 Lite Teleop (or compatible GELLO device) connected via USB
-  - dynamixel-sdk installed (uv pip install dynamixel-sdk)
+  - Direct USB: R1 Lite Teleop connected via USB + dynamixel-sdk
+  - Network: gello_position_server.py running on the R1 Lite Teleop device
 """
 
 import argparse
@@ -85,31 +89,37 @@ def _make_raw_table(
     return table
 
 
-def test_raw_input(port: str, baudrate: int, bimanual: bool) -> None:
+def test_raw_input(port: str, baudrate: int, bimanual: bool, host: str | None = None, network_port: int = 5555) -> None:
     """Print raw Dynamixel joint positions with rich Live display."""
-    from robots_realtime.dynamixel.dynamixel_reader import DynamixelReader
+    if host is not None:
+        from robots_realtime.dynamixel.network_dynamixel_reader import NetworkDynamixelReader
 
-    left_ids = [1, 2, 3, 4, 5, 6]
-    right_ids = [7, 8, 9, 10, 11, 12]
-    left_signs = [1, 1, -1, -1, -1, 1]
-    right_signs = [1, 1, -1, -1, -1, 1]
+        print(f"Connecting to {host}:{network_port} (network mode, bimanual={bimanual})...")
+        reader = NetworkDynamixelReader(host=host, port=network_port)
+    else:
+        from robots_realtime.dynamixel.dynamixel_reader import DynamixelReader
 
-    all_ids = left_ids + (right_ids if bimanual else [])
-    all_signs = left_signs + (right_signs if bimanual else [])
+        left_ids = [1, 2, 3, 4, 5, 6]
+        right_ids = [7, 8, 9, 10, 11, 12]
+        left_signs = [1, 1, -1, -1, -1, 1]
+        right_signs = [1, 1, -1, -1, -1, 1]
 
-    print(f"Connecting to {port} (baudrate={baudrate}, bimanual={bimanual})...")
-    reader = DynamixelReader(
-        port=port,
-        motor_ids=all_ids,
-        joint_signs=all_signs,
-        baudrate=baudrate,
-    )
+        all_ids = left_ids + (right_ids if bimanual else [])
+        all_signs = left_signs + (right_signs if bimanual else [])
+
+        print(f"Connecting to {port} (baudrate={baudrate}, bimanual={bimanual})...")
+        reader = DynamixelReader(
+            port=port,
+            motor_ids=all_ids,
+            joint_signs=all_signs,
+            baudrate=baudrate,
+        )
 
     print("Connected! Reading joint positions... (Ctrl+C to stop)\n")
 
     read_count = 0
     error_count = 0
-    n_left = len(left_ids)
+    n_left = 6
 
     with Live(
         _make_raw_table(reader, n_left, bimanual, read_count, error_count),
@@ -151,18 +161,22 @@ def _make_agent_table(action: dict, step: int) -> Table:
     return table
 
 
-def test_with_agent(port: str, baudrate: int, bimanual: bool) -> None:
+def test_with_agent(port: str, baudrate: int, bimanual: bool, host: str | None = None, network_port: int = 5555) -> None:
     """Run GELLO agent with PrintRobot — no real YAM hardware needed."""
     from robots_realtime.agents.teleoperation.yam_gello_agent import YamGelloAgent
     from robots_realtime.robots.robot import PrintRobot
 
     print("=== GELLO Agent Test (no real robot) ===")
+    mode = f"network ({host}:{network_port})" if host else f"USB ({port})"
+    print(f"Mode: {mode}")
     print("The agent reads Dynamixel positions and computes joint targets.")
     print("Move the GELLO leader arms to see the output change.\n")
 
     agent = YamGelloAgent(
         port=port,
         baudrate=baudrate,
+        host=host,
+        network_port=network_port,
         bimanual=bimanual,
     )
 
@@ -205,6 +219,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test GELLO Dynamixel input for YAM teleop")
     parser.add_argument("--port", default="/dev/ttyUSB0", help="Dynamixel USB serial port (default: /dev/ttyUSB0)")
     parser.add_argument("--baudrate", type=int, default=4_000_000, help="Serial baudrate (default: 4000000)")
+    parser.add_argument("--host", default=None, help="R1 Lite Teleop IP for network mode (e.g. 10.42.0.1)")
+    parser.add_argument("--network-port", type=int, default=5555, help="TCP port for network mode (default: 5555)")
     parser.add_argument("--single-arm", action="store_true", help="Single arm mode (left only, IDs 1-6)")
     parser.add_argument("--with-agent", action="store_true", help="Run full agent loop with PrintRobot (no real YAM)")
     args = parser.parse_args()
@@ -212,6 +228,6 @@ if __name__ == "__main__":
     bimanual = not args.single_arm
 
     if args.with_agent:
-        test_with_agent(args.port, args.baudrate, bimanual)
+        test_with_agent(args.port, args.baudrate, bimanual, host=args.host, network_port=args.network_port)
     else:
-        test_raw_input(args.port, args.baudrate, bimanual)
+        test_raw_input(args.port, args.baudrate, bimanual, host=args.host, network_port=args.network_port)
