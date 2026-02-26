@@ -35,6 +35,7 @@ dependencies = [
     "lerobot[feetech]",
     "lerobot_teleoperator_yamactiveleader",
     "xdof_sdk",
+    "dynamixel-sdk",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,39 @@
+_target_: robots_realtime.envs.launch.LaunchConfig
+hz: 100.0
+
+sensors:
+  cameras:
+    left_wrist_camera:
+        _target_: robots_realtime.sensors.cameras.camera.CameraNode
+        camera:
+            _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
+            device_path: "/dev/video4"
+            camera_type: "realsense_camera"
+    right_wrist_camera:
+        _target_: robots_realtime.sensors.cameras.camera.CameraNode
+        camera:
+            _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
+            device_path: "/dev/video10"
+            camera_type: "realsense_camera"
+
+robots:
+  left: ["robot_configs/yam/left.yaml"]
+  right: ["robot_configs/yam/left.yaml", "robot_configs/yam/right.yaml"]
+
+agent:
+  _target_: robots_realtime.agents.teleoperation.yam_gello_agent.YamGelloAgent
+  port: "/dev/ttyUSB0"
+  baudrate: 4000000
+  bimanual: true
+  left_motor_ids: [1, 2, 3, 4, 5, 6]
+  right_motor_ids: [7, 8, 9, 10, 11, 12]
+  joint_signs_left: [1, 1, -1, -1, -1, 1]
+  joint_signs_right: [1, 1, -1, -1, -1, 1]
+  default_gripper_value: 0.0
+
+station_metadata:
+  world_frame: "left_arm"
+  extrinsics:
+    right_arm_extrinsic:
+      position: [0.0, -0.61, 0.0]
+      rotation: [1.0, 0.0, 0.0, 0.0]
