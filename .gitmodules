@@ -5,9 +5,6 @@
 [submodule "dependencies/jaxls"]
 	path = dependencies/jaxls
 	url = https://github.com/brentyi/jaxls.git
-[submodule "dependencies/pyroki"]
-	path = dependencies/pyroki
-	url = https://github.com/chungmin99/pyroki.git
 [submodule "dependencies/mjlab"]
 	path = dependencies/mjlab
 	url = https://github.com/mujocolab/mjlab.git

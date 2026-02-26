@@ -121,12 +121,17 @@ class CameraNode:
 
     def _get_latest_data(self) -> Dict[str, Any]:
         assert self.latest_data is not None, "latest_data should not be None at this point"
-        return dict(
+        result = dict(
             images=self.latest_data.images,
             timestamp=self.latest_data.timestamp,
-            depth_data=self.latest_data.depth_data if self.latest_data.depth_data is not None else None,
-            intrinsics=self.camera.read_calibration_data_intrinsics() if self.camera.intrinsic_data is not None else None,
         )
+        depth_data = getattr(self.latest_data, "depth_data", None)
+        if depth_data is not None:
+            result["depth_data"] = depth_data
+        intrinsic_data = getattr(self.camera, "intrinsic_data", None)
+        if intrinsic_data is not None:
+            result["intrinsics"] = self.camera.read_calibration_data_intrinsics()
+        return result
 
     @remote(serialization_needed=True)
     def get_camera_info(self) -> Dict[str, Any]:

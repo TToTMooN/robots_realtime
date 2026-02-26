@@ -17,6 +17,9 @@ ROBOT_PROTOCOL_METHODS = {
     "get_robot_info": True,
     "get_robot_type": True,
     "command_target_vel": False,
+    "move_joints": False,
+    "zero_torque_mode": False,
+    "soft_release": False,
 }
 
 

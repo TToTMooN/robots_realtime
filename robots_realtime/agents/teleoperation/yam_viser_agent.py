@@ -9,19 +9,38 @@ import viser.extras
 from dm_env.specs import Array
 
 from robots_realtime.agents.agent import Agent
-from robots_realtime.robots.inverse_kinematics.yam_pyroki import YamPyroki
 from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
 from robots_realtime.utils.portal_utils import remote
 
 
-class YamPyrokiViserAgent(Agent):
-    def __init__(self, bimanual: bool = False, right_arm_extrinsic: Optional[Dict[str, Any]] = None):
+def _create_ik_solver(solver_name: str, ik_params: Optional[Dict[str, Any]] = None, **kwargs):
+    extra = ik_params or {}
+    if solver_name == "pyroki":
+        from robots_realtime.robots.inverse_kinematics.yam_pyroki import YamPyroki
+
+        return YamPyroki(**kwargs)
+    elif solver_name == "pink":
+        from robots_realtime.robots.inverse_kinematics.yam_pink import YamPink
+
+        return YamPink(**{**kwargs, **extra})
+    else:
+        raise ValueError(f"Unknown IK solver: {solver_name!r}. Choose 'pyroki' or 'pink'.")
+
+
+class YamViserAgent(Agent):
+    def __init__(
+        self,
+        bimanual: bool = False,
+        right_arm_extrinsic: Optional[Dict[str, Any]] = None,
+        ik_solver: str = "pink",
+        ik_params: Optional[Dict[str, Any]] = None,
+    ):
         self.right_arm_extrinsic = right_arm_extrinsic
         self.bimanual = bimanual
         if bimanual:
             assert right_arm_extrinsic is not None, "right_arm_extrinsic must be provided for bimanual robot"
         self.viser_server = viser.ViserServer()
-        self.ik = YamPyroki(viser_server=self.viser_server, bimanual=bimanual)
+        self.ik = _create_ik_solver(ik_solver, ik_params=ik_params, viser_server=self.viser_server, bimanual=bimanual)
         self.ik_thread = threading.Thread(target=self.ik.run)
         self.ik_thread.start()
         self.obs = None
