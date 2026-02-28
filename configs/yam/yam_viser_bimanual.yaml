@@ -6,13 +6,15 @@ sensors:
         _target_: robots_realtime.sensors.cameras.camera.CameraNode
         camera:
             _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
-            device_path: "/dev/video4"
+            serial_number: "346123070863"
+            video_index: 4
             camera_type: "realsense_camera"
     right_wrist_camera:
         _target_: robots_realtime.sensors.cameras.camera.CameraNode
         camera:
             _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
-            device_path: "/dev/video10"
+            serial_number: "346123071172"
+            video_index: 4
             camera_type: "realsense_camera"
 
 robots:

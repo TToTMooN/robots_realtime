@@ -93,8 +93,13 @@ class YamGelloAgent(Agent):
         in ``act()`` to correct leader→follower direction differences.
     joint_signs_right : Sequence[int]
         Per-joint sign correction for the right arm.  Same behaviour as above.
+    joycon_gripper : bool
+        If True, spawn a ``JoyConGripperReader`` to read gripper values from
+        paired Nintendo Joy-Con controllers via Bluetooth.  Requires the
+        ``evdev`` package.
     default_gripper_value : float
-        Gripper position sent every step (0.0 = open).
+        Gripper position sent every step when *joycon_gripper* is False
+        (0.0 = open).
     """
 
     use_joint_state_as_action: bool = False
@@ -110,6 +115,7 @@ class YamGelloAgent(Agent):
         right_motor_ids: Sequence[int] = (7, 8, 9, 10, 11, 12),
         joint_signs_left: Sequence[int] = (1, 1, -1, -1, -1, 1),
         joint_signs_right: Sequence[int] = (1, 1, -1, -1, -1, 1),
+        joycon_gripper: bool = False,
         default_gripper_value: float = 0.0,
     ) -> None:
         self.bimanual = bimanual
@@ -117,6 +123,13 @@ class YamGelloAgent(Agent):
         self._joint_limits = _YAM_JOINT_LIMITS
         self._signs_left = np.asarray(joint_signs_left, dtype=np.float64)
         self._signs_right = np.asarray(joint_signs_right, dtype=np.float64)
+
+        self._gripper_reader: Optional["JoyConGripperReader"] = None
+        if joycon_gripper:
+            from robots_realtime.input_devices.joycon_gripper_reader import JoyConGripperReader
+
+            self._gripper_reader = JoyConGripperReader()
+            logger.info("Joy-Con gripper control enabled")
 
         self._n_left = len(left_motor_ids)
         self._n_right = len(right_motor_ids) if bimanual else 0
@@ -151,6 +164,11 @@ class YamGelloAgent(Agent):
     def act(self, obs: Dict[str, Any]) -> Dict[str, Dict[str, np.ndarray]]:
         leader_pos = self._reader.get_joint_positions()
 
+        if self._gripper_reader is not None:
+            grip_left, grip_right = self._gripper_reader.get_gripper_values()
+        else:
+            grip_left = grip_right = self._default_gripper
+
         left_joints = leader_pos[: self._n_left]
         if self._network_mode:
             left_joints = left_joints * self._signs_left
@@ -158,7 +176,7 @@ class YamGelloAgent(Agent):
 
         action: Dict[str, Dict[str, np.ndarray]] = {
             "left": {
-                "pos": np.concatenate([left_clamped, [self._default_gripper]]),
+                "pos": np.concatenate([left_clamped, [grip_left]]),
             }
         }
 
@@ -168,7 +186,7 @@ class YamGelloAgent(Agent):
                 right_joints = right_joints * self._signs_right
             right_clamped = np.clip(right_joints, self._joint_limits[:, 0], self._joint_limits[:, 1])
             action["right"] = {
-                "pos": np.concatenate([right_clamped, [self._default_gripper]]),
+                "pos": np.concatenate([right_clamped, [grip_right]]),
             }
 
         return action
@@ -184,4 +202,6 @@ class YamGelloAgent(Agent):
 
     def close(self) -> None:
         self._reader.close()
+        if self._gripper_reader is not None:
+            self._gripper_reader.close()
         logger.info("YamGelloAgent closed")

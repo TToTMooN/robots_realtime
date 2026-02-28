@@ -7,13 +7,15 @@ sensors:
         _target_: robots_realtime.sensors.cameras.camera.CameraNode
         camera:
             _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
-            device_path: "/dev/video4"
+            serial_number: "346123070863"
+            video_index: 4
             camera_type: "realsense_camera"
     right_wrist_camera:
         _target_: robots_realtime.sensors.cameras.camera.CameraNode
         camera:
             _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
-            device_path: "/dev/video10"
+            serial_number: "346123071172"
+            video_index: 4
             camera_type: "realsense_camera"
 
 robots:
@@ -29,6 +31,7 @@ agent:
   right_motor_ids: [7, 8, 9, 10, 11, 12]
   joint_signs_left: [1, 1, -1, -1, -1, 1]
   joint_signs_right: [1, 1, -1, -1, -1, 1]
+  joycon_gripper: true
   default_gripper_value: 0.0
 
 station_metadata:
