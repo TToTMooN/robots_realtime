@@ -20,6 +20,7 @@ from robots_realtime.envs.configs.loader import DictLoader
 from robots_realtime.envs.robot_env import RobotEnv
 from robots_realtime.robots.robot import Robot
 from robots_realtime.robots.utils import Rate, Timeout
+from robots_realtime.robots.viser.viser_monitor import ViserMonitor
 from robots_realtime.sensors.cameras.camera import CameraDriver
 from robots_realtime.utils.launch_utils import (
     cleanup_processes,
@@ -59,6 +60,7 @@ class LaunchConfig:
     save_path: Optional[str] = None
     station_metadata: Dict[str, str] = field(default_factory=dict)
     sim_mode: bool = False  # skip CAN/sensors, instantiate robots & agent in-process
+    enable_monitor: bool = True  # launch ViserMonitor for camera feeds + recording
 
 
 @dataclass
@@ -260,6 +262,23 @@ def main(args: Args) -> None:
 
         agent = initialize_agent(agent_cfg, server_processes)
 
+        # Create a standalone ViserMonitor for agents that don't have their own
+        # (e.g. GELLO, VR).  YamViserAgent already embeds a ViserMonitor.
+        monitor: Optional[ViserMonitor] = None
+        agent_target = agent_cfg.get("_target_", "")
+        if main_config.enable_monitor and "YamViserAgent" not in agent_target:
+            is_bimanual = len(robots) > 1
+            right_extrinsic = (
+                main_config.station_metadata.get("extrinsics", {}).get("right_arm_extrinsic")
+                if main_config.station_metadata else None
+            )
+            monitor = ViserMonitor(
+                enable_urdf=True,
+                bimanual=is_bimanual,
+                right_arm_extrinsic=right_extrinsic,
+            )
+            logger.info("ViserMonitor started (standalone) for camera feeds + recording + URDF")
+
         logger.info("Creating robot environment...")
         frequency = main_config.hz
         rate = Rate(frequency, rate_name="control_loop")
@@ -276,9 +295,16 @@ def main(args: Args) -> None:
         logger.info(f"Saved pre-teleop positions for: {list(saved_positions.keys())}")
         logger.info(f"Action spec: {env.action_spec()}")
 
-        # Wait for the IK solver to JIT-compile and converge before reading
-        # the initial target.  Without this, pyroki returns np.zeros(6).
-        initial_action = _wait_for_ik_convergence(agent, obs, list(robots.keys()))
+        # Only IK-based agents (Viser, VR) need convergence warm-up.
+        # Direct-joint agents (GELLO) produce valid actions immediately.
+        _IK_AGENT_PATTERNS = ["YamViserAgent", "YamVrAgent"]
+        agent_needs_ik = any(pat in agent_target for pat in _IK_AGENT_PATTERNS)
+
+        if agent_needs_ik:
+            initial_action = _wait_for_ik_convergence(agent, obs, list(robots.keys()))
+        else:
+            logger.info("Agent does not use IK, skipping convergence wait.")
+            initial_action = agent.act(obs)
 
         initial_targets = {}
         for name in robots:
@@ -290,7 +316,7 @@ def main(args: Args) -> None:
             _safe_move_robots(robots, initial_targets)
 
         logger.info("Starting control loop...")
-        _run_control_loop(env, agent, main_config)
+        _run_control_loop(env, agent, main_config, monitor=monitor)
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received, initiating safe shutdown...")
@@ -318,6 +344,8 @@ def main(args: Args) -> None:
             except Exception as e:
                 logger.warning(f"Error during safe shutdown: {e}")
 
+        if "monitor" in locals() and monitor is not None:
+            monitor.close()
         if "env" in locals():
             env.close()
         if "agent" in locals():
@@ -390,7 +418,12 @@ def _run_sim_control_loop(
                 robot.close()
 
 
-def _run_control_loop(env: RobotEnv, agent: Agent, config: LaunchConfig) -> None:
+def _run_control_loop(
+    env: RobotEnv,
+    agent: Agent,
+    config: LaunchConfig,
+    monitor: Optional[ViserMonitor] = None,
+) -> None:
     """Run the main control loop.  Exits when _shutdown_requested is set by SIGINT."""
     steps = 0
     start_time = time.time()
@@ -404,6 +437,9 @@ def _run_control_loop(env: RobotEnv, agent: Agent, config: LaunchConfig) -> None
 
         with Timeout(1, "Env step", "warning"):
             obs = env.step(action)
+
+        if monitor is not None:
+            monitor.update(obs)
 
         steps += 1
         loop_count += 1

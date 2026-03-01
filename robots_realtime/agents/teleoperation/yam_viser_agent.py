@@ -1,11 +1,8 @@
 import threading
 import time
 from copy import deepcopy
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-import cv2
 import numpy as np
 import viser
 import viser.extras
@@ -13,7 +10,7 @@ from dm_env.specs import Array
 from loguru import logger
 
 from robots_realtime.agents.agent import Agent
-from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
+from robots_realtime.robots.viser.viser_monitor import ViserMonitor
 from robots_realtime.utils.portal_utils import remote
 
 
@@ -45,13 +42,13 @@ class YamViserAgent(Agent):
             assert right_arm_extrinsic is not None, "right_arm_extrinsic must be provided for bimanual robot"
         self.viser_server = viser.ViserServer()
         self.ik = _create_ik_solver(ik_solver, ik_params=ik_params, viser_server=self.viser_server, bimanual=bimanual)
+
+        # Shared monitor handles camera feeds + recording on the same server
+        self._monitor = ViserMonitor(self.viser_server)
+
         self.ik_thread = threading.Thread(target=self.ik.run)
         self.ik_thread.start()
         self.obs = None
-        self._recording = False
-        self._writers: Dict[str, cv2.VideoWriter] = {}
-        self._record_dir: Optional[Path] = None
-        self._record_lock = threading.Lock()
         self.real_vis_thread = threading.Thread(target=self._update_visualization, daemon=True)
         self.real_vis_thread.start()
         self._setup_visualization()
@@ -89,73 +86,21 @@ class YamViserAgent(Agent):
                 "Right Gripper", min=0.0, max=2.4, step=0.01, initial_value=0.0
             )
 
-        self.viser_cam_img_handles = {}
-
-        self.record_button = self.viser_server.gui.add_button("Start Recording", color="green")
-
-        @self.record_button.on_click
-        def _(_event: viser.GuiEvent) -> None:
-            self._toggle_recording()
-
-    def _toggle_recording(self) -> None:
-        with self._record_lock:
-            if not self._recording:
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                self._record_dir = Path("recordings") / f"recording_{ts}"
-                self._record_dir.mkdir(parents=True, exist_ok=True)
-
-                rgb_images = obs_get_rgb(self.obs) if self.obs is not None else {}
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                for cam_name, img in rgb_images.items():
-                    h, w = img.shape[:2]
-                    path = str(self._record_dir / f"{cam_name}.mp4")
-                    self._writers[cam_name] = cv2.VideoWriter(path, fourcc, 30, (w, h))
-
-                self._recording = True
-                self.record_button.name = "Stop Recording"
-                self.record_button.color = "red"
-                logger.info(f"Recording started -> {self._record_dir}")
-            else:
-                for w in self._writers.values():
-                    w.release()
-                logger.info(f"Recording saved to {self._record_dir}")
-                self._writers.clear()
-                self._record_dir = None
-                self._recording = False
-                self.record_button.name = "Start Recording"
-                self.record_button.color = "green"
-
     def _update_visualization(self):
+        """Update real robot state URDF overlay from observations."""
         while self.obs is None:
             time.sleep(0.025)
         while True:
             if self.bimanual:
                 self.urdf_vis_right_real.update_cfg(np.flip(self.obs["right"]["joint_pos"]))
             self.urdf_vis_left_real.update_cfg(np.flip(self.obs["left"]["joint_pos"]))
-
-            rgb_images = obs_get_rgb(self.obs)
-            if rgb_images:
-                for key in rgb_images.keys():
-                    if key not in self.viser_cam_img_handles.keys():
-                        self.viser_cam_img_handles[key] = self.viser_server.gui.add_image(rgb_images[key], label=key)
-                    self.viser_cam_img_handles[key].image = resize_with_pad(rgb_images[key], 224, 224)
-
-                with self._record_lock:
-                    if self._recording:
-                        for cam_name, img in rgb_images.items():
-                            writer = self._writers.get(cam_name)
-                            if writer is None:
-                                h, w = img.shape[:2]
-                                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                                path = str(self._record_dir / f"{cam_name}.mp4")
-                                writer = cv2.VideoWriter(path, fourcc, 30, (w, h))
-                                self._writers[cam_name] = writer
-                            writer.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-
             time.sleep(0.02)
 
     def act(self, obs: Dict[str, Any]) -> Any:
         self.obs = deepcopy(obs)
+
+        # Feed camera images to monitor
+        self._monitor.update(obs)
 
         action = {
             "left": {
@@ -173,13 +118,7 @@ class YamViserAgent(Agent):
         return action
 
     def close(self) -> None:
-        with self._record_lock:
-            if self._recording:
-                for w in self._writers.values():
-                    w.release()
-                logger.info(f"Recording saved to {self._record_dir}")
-                self._writers.clear()
-                self._recording = False
+        self._monitor.close()
 
     @remote(serialization_needed=True)
     def action_spec(self) -> Dict[str, Dict[str, Array]]:

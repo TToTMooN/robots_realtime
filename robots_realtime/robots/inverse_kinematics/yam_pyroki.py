@@ -12,7 +12,7 @@ import viser.extras
 import viser.transforms as vtf
 
 from robots_realtime.robots.inverse_kinematics.pyroki_snippets._solve_ik import solve_ik
-from robots_realtime.robots.viser.viser_base import TransformHandle, ViserAbstractBase
+from robots_realtime.robots.viser.viser_base import TransformHandle, ViserAbstractBase, _AUTO_VISER
 
 
 class YamPyroki(ViserAbstractBase):
@@ -24,7 +24,7 @@ class YamPyroki(ViserAbstractBase):
     def __init__(
         self,
         rate: float = 100.0,
-        viser_server: Optional[viser.ViserServer] = None,
+        viser_server=_AUTO_VISER,
         bimanual: bool = False,
         coordinate_frame: Literal["base", "world"] = "base",
     ):
@@ -42,6 +42,7 @@ class YamPyroki(ViserAbstractBase):
 
     def _setup_visualization(self):
         super()._setup_visualization()
+        assert self.viser_server is not None
         if self.bimanual:
             self.base_frame_right = self.viser_server.scene.add_frame("/base/base_right", show_axes=False)
             self.base_frame_right.position = (0.0, -0.61, 0.0)
@@ -57,14 +58,14 @@ class YamPyroki(ViserAbstractBase):
     def _setup_gui(self):
         """Setup GUI elements."""
         super()._setup_gui()
-
-        # Add timing displays for each arm
+        assert self.viser_server is not None
         self.timing_handle_left = self.viser_server.gui.add_number("Left Arm Time (ms)", 0.01, disabled=True)
         if self.bimanual:
             self.timing_handle_right = self.viser_server.gui.add_number("Right Arm Time (ms)", 0.01, disabled=True)
 
     def _initialize_transform_handles(self):
         """Initialize transform handle positions for arm IK targets."""
+        assert self.viser_server is not None
         if self.transform_handles["left"].control is not None:
             self.transform_handles["left"].control.position = (0.25, 0.0, 0.26)
             self.transform_handles["left"].control.wxyz = vtf.SO3.from_rpy_radians(np.pi / 2, 0.0, np.pi / 2).wxyz
@@ -97,21 +98,6 @@ class YamPyroki(ViserAbstractBase):
         """Update optional handle sizes (none for this implementation)."""
         pass
 
-    def get_target_poses(self):
-        """Get target poses with optional TCP offset applied."""
-        target_poses = {}
-
-        for side, handle in self.transform_handles.items():
-            if handle.control is None:
-                continue
-
-            # Combine control handle with TCP offset
-            control_tf = vtf.SE3(np.array([*handle.control.wxyz, *handle.control.position]))
-            tcp_offset_tf = vtf.SE3(np.array([*handle.tcp_offset_frame.wxyz, *handle.tcp_offset_frame.position]))
-            target_poses[side] = control_tf @ tcp_offset_tf
-
-        return target_poses
-
     def solve_ik(self):
         """Solve inverse kinematics for arm IK targets."""
         if self.robot is None:
@@ -142,22 +128,28 @@ class YamPyroki(ViserAbstractBase):
 
     def update_visualization(self):
         """Update visualization with current joint configurations."""
-        if self.joints is not None:
-            self.urdf_vis_left.update_cfg(self.joints["left"])
-            if self.bimanual:
-                self.urdf_vis_right.update_cfg(self.joints["right"])
+        if self.viser_server is None or self.joints is None:
+            return
+        self.urdf_vis_left.update_cfg(self.joints["left"])
+        if self.bimanual:
+            self.urdf_vis_right.update_cfg(self.joints["right"])
 
     def home(self):
         """Reset both arms to rest pose."""
-        self.joints["left"] = self.rest_pose.copy()
-        if self.bimanual:
-            self.joints["right"] = self.rest_pose.copy()
+        sides = ["left", "right"] if self.bimanual else ["left"]
+        for side in sides:
+            self.joints[side] = self.rest_pose.copy()
 
-        self._initialize_transform_handles()
+        default_wxyz = np.array(vtf.SO3.from_rpy_radians(np.pi / 2, 0.0, np.pi / 2).wxyz, dtype=np.float64)
+        for side in sides:
+            self._ee_targets[side]["position"] = np.array([0.25, 0.0, 0.26], dtype=np.float64)
+            self._ee_targets[side]["wxyz"] = default_wxyz.copy()
 
-        self.urdf_vis_left.update_cfg(self.rest_pose)
-        if self.bimanual:
-            self.urdf_vis_right.update_cfg(self.rest_pose)
+        if self.viser_server is not None:
+            self._initialize_transform_handles()
+            self.urdf_vis_left.update_cfg(self.rest_pose)
+            if self.bimanual:
+                self.urdf_vis_right.update_cfg(self.rest_pose)
 
     def get_joint_positions(self) -> Optional[np.ndarray]:
         """Get current joint positions for the bimanual robot."""

@@ -1,7 +1,9 @@
 """
 VR teleoperation agent for bimanual YAM arms using Pico VR controllers.
-Replaces the Viser gizmo input with VR controller poses while reusing
-the IK solver and Viser visualization.
+
+Replaces the Viser gizmo input with VR controller poses while driving
+the IK solver in headless mode (no Viser server).  Camera feeds and
+recording are handled by the shared ViserMonitor in launch.py.
 
 IK backend is selectable via the ``ik_solver`` parameter:
   - "pink" (default)   -- Pinocchio QP differential IK (requires pin-pink)
@@ -16,29 +18,22 @@ VR controller button mapping:
   - A / X  : Reset corresponding arm to initial EE pose (task space)
 """
 
-import logging
 import threading
 import time
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import viser
-import viser.extras
 import viser.transforms as vtf
 from dm_env.specs import Array
+from loguru import logger
 
 from robots_realtime.agents.agent import Agent
 from robots_realtime.agents.teleoperation.yam_viser_agent import _create_ik_solver
-from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
 from robots_realtime.utils.portal_utils import remote
 from robots_realtime.utils.xr_client import XrClient
 
-logger = logging.getLogger(__name__)
-
 # Default VR-to-robot frame rotation.
-# Maps VR headset frame (x=right, y=up, z=back) to robot base frame (x=forward, y=left, z=up).
-# Adjust if your robot base orientation differs.
 R_VR_TO_ROBOT_DEFAULT = np.array([
     [0, 0, -1],
     [-1, 0, 0],
@@ -49,9 +44,6 @@ GRIP_ACTIVATION_THRESHOLD = 0.9
 YAM_GRIPPER_OPEN = 0.0
 YAM_GRIPPER_CLOSED = 2.4
 
-# Default initial EE pose (same as the original "pointing front" in the IK solvers).
-# Adjust via the YAML config (initial_ee_position / initial_ee_rpy) once you find
-# a good pose using the Viser gizmo.
 DEFAULT_INITIAL_EE_POSITION = [0.25, 0.0, 0.26]
 DEFAULT_INITIAL_EE_RPY = [np.pi / 2, 0.0, np.pi / 2]
 
@@ -121,8 +113,8 @@ class YamVrAgent(Agent):
         if bimanual:
             assert right_arm_extrinsic is not None, "right_arm_extrinsic must be provided for bimanual robot"
 
-        self.viser_server = viser.ViserServer()
-        self.ik = _create_ik_solver(ik_solver, ik_params=ik_params, viser_server=self.viser_server, bimanual=bimanual)
+        # Headless IK — no ViserServer
+        self.ik = _create_ik_solver(ik_solver, ik_params=ik_params, viser_server=None, bimanual=bimanual)
 
         # VR state tracking per arm
         self.sides = ["left", "right"] if bimanual else ["left"]
@@ -133,20 +125,16 @@ class YamVrAgent(Agent):
         self.gripper_value: Dict[str, float] = {s: YAM_GRIPPER_OPEN for s in self.sides}
         self.active: Dict[str, bool] = {s: False for s in self.sides}
 
-        # Button debounce state (per-side: X for left controller, A for right controller)
         self._reset_btn_prev: Dict[str, bool] = {"left": False, "right": False}
-        # Smooth-reset interpolation state (populated when A/X triggers a reset)
         self._reset_t0: Dict[str, Optional[float]] = {s: None for s in self.sides}
         self._reset_start_pos: Dict[str, Optional[np.ndarray]] = {s: None for s in self.sides}
         self._reset_start_wxyz: Dict[str, Optional[np.ndarray]] = {s: None for s in self.sides}
 
         self.xr_client = XrClient()
 
-        # Setup visualization before starting threads that depend on GUI handles
         self.obs = None
-        self._setup_visualization()
 
-        # Override IK solver's default EE pose with our configured initial pose
+        # Set initial IK targets
         self._set_initial_pose()
 
         # Start IK solver thread
@@ -157,92 +145,38 @@ class YamVrAgent(Agent):
         self.vr_thread = threading.Thread(target=self._vr_processing_loop, daemon=True)
         self.vr_thread.start()
 
-        # Start visualization thread
-        self.real_vis_thread = threading.Thread(target=self._update_visualization, daemon=True)
-        self.real_vis_thread.start()
-
-    def _setup_visualization(self) -> None:
-        """Setup semi-transparent real robot state overlay in Viser."""
-        self.base_frame_left_real = self.viser_server.scene.add_frame("/base_left_real", show_axes=False)
-        self.urdf_vis_left_real = viser.extras.ViserUrdf(
-            self.viser_server,
-            deepcopy(self.ik.urdf),
-            root_node_name="/base_left_real",
-            mesh_color_override=(0.8, 0.5, 0.5),
-        )
-        for mesh in self.urdf_vis_left_real._meshes:
-            mesh.opacity = 0.25  # type: ignore
-
-        if self.bimanual and self.right_arm_extrinsic is not None:
-            self.ik.base_frame_right.position = np.array(self.right_arm_extrinsic["position"])
-            self.ik.base_frame_right.wxyz = np.array(self.right_arm_extrinsic["rotation"])
-            self.base_frame_right_real = self.viser_server.scene.add_frame(
-                "/base_left_real/base_right_real", show_axes=False
-            )
-            self.base_frame_right_real.position = self.ik.base_frame_right.position
-            self.urdf_vis_right_real = viser.extras.ViserUrdf(
-                self.viser_server,
-                deepcopy(self.ik.urdf),
-                root_node_name="/base_left_real/base_right_real",
-                mesh_color_override=(0.8, 0.5, 0.5),
-            )
-            for mesh in self.urdf_vis_right_real._meshes:
-                mesh.opacity = 0.25  # type: ignore
-
-        # Disable gizmo drag interaction — VR drives the targets, not mouse.
-        # Gizmos remain visible as target position indicators.
-        for handle in self.ik.transform_handles.values():
-            if handle.control is not None:
-                handle.control.visible = False
-
-        # VR status display
-        self.vr_status_handles = {}
-        for side in self.sides:
-            self.vr_status_handles[side] = self.viser_server.gui.add_text(
-                f"VR {side.title()}", initial_value="inactive"
-            )
-        self.viser_cam_img_handles: Dict[str, Any] = {}
+    # ------------------------------------------------------------------ #
+    #  Pose helpers
+    # ------------------------------------------------------------------ #
 
     def _set_initial_pose(self) -> None:
-        """Immediately set IK targets to the configured initial EE pose (startup only).
-
-        Safe because launch.py uses _safe_move_robots() to slowly interpolate
-        the physical robot to the resulting IK solution before the control loop starts.
-        """
+        """Set IK targets to the configured initial EE pose (startup only)."""
         for side in self.sides:
-            handle = self.ik.transform_handles[side]
-            if handle.control is not None:
-                handle.control.position = self.initial_ee_position
-                handle.control.wxyz = self.initial_ee_wxyz
+            self.ik.set_target(side, self.initial_ee_position, self.initial_ee_wxyz)
             self.ref_vr_pos[side] = None
             self.ref_vr_rot[side] = None
             self.ref_ee_pos[side] = None
             self.ref_ee_rot[side] = None
             self.active[side] = False
-        logger.info("Set initial EE pose: pos=%s rpy=%s", self.initial_ee_position, self.initial_ee_rpy)
+        logger.info("Set initial EE pose: pos={} rpy={}", self.initial_ee_position, self.initial_ee_rpy)
 
     def _begin_smooth_reset(self, side: str) -> None:
-        """Start a smooth interpolation of the IK target back to the initial pose.
-
-        The VR processing loop will drive the interpolation forward each tick
-        over RESET_DURATION_S seconds, blocking VR input for this arm until done.
-        """
-        handle = self.ik.transform_handles[side]
-        if handle.control is not None:
-            self._reset_start_pos[side] = np.array(handle.control.position)
-            self._reset_start_wxyz[side] = np.array(handle.control.wxyz)
+        """Start a smooth interpolation of the IK target back to the initial pose."""
+        target = self.ik.get_target(side)
+        self._reset_start_pos[side] = target["position"].copy()
+        self._reset_start_wxyz[side] = target["wxyz"].copy()
         self._reset_t0[side] = time.time()
         self.ref_vr_pos[side] = None
         self.ref_vr_rot[side] = None
         self.ref_ee_pos[side] = None
         self.ref_ee_rot[side] = None
         self.active[side] = False
-        logger.info("Smooth reset started for %s arm (%.1fs)", side, RESET_DURATION_S)
+        logger.info("Smooth reset started for {} arm ({:.1f}s)", side, RESET_DURATION_S)
 
     def _tick_smooth_reset(self, side: str) -> bool:
         """Advance the smooth-reset interpolation for one arm.
 
-        Returns True if the reset is still in progress (caller should skip VR input).
+        Returns True if the reset is still in progress.
         """
         t0 = self._reset_t0[side]
         if t0 is None:
@@ -260,49 +194,31 @@ class YamVrAgent(Agent):
         if start_pos is not None and start_wxyz is not None:
             pos = start_pos * (1.0 - s) + target_pos * s
             wxyz = _quat_slerp(start_wxyz, target_wxyz, s)
-
-            handle = self.ik.transform_handles[side]
-            if handle.control is not None:
-                handle.control.position = tuple(pos)
-                handle.control.wxyz = tuple(wxyz)  # type: ignore
-
-        self.vr_status_handles[side].value = f"resetting... {min(alpha, 1.0) * 100:.0f}%"
+            self.ik.set_target(side, pos, wxyz)
 
         if finished:
             self._reset_t0[side] = None
             self._reset_start_pos[side] = None
             self._reset_start_wxyz[side] = None
-            self.vr_status_handles[side].value = "inactive"
-            logger.info("Smooth reset complete for %s arm", side)
+            logger.info("Smooth reset complete for {} arm", side)
 
         return not finished
 
+    # ------------------------------------------------------------------ #
+    #  VR input
+    # ------------------------------------------------------------------ #
+
     def _transform_vr_pose(self, vr_pose: np.ndarray) -> tuple[np.ndarray, vtf.SO3]:
-        """Transform a VR controller pose from VR frame to robot base frame.
-
-        Args:
-            vr_pose: [x, y, z, qx, qy, qz, qw] from SDK.
-
-        Returns:
-            (position_xyz, SO3_rotation) in robot frame.
-        """
+        """Transform a VR controller pose from VR frame to robot base frame."""
         pos_robot = self.R_vr_to_robot @ np.array(vr_pose[:3])
-
         quat_xyzw = vr_pose[3:7]
         rot_vr = vtf.SO3(np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]]))
         rot_robot = self.R_vr_so3 @ rot_vr @ self.R_vr_so3.inverse()
-
         return pos_robot, rot_robot
 
     def _handle_buttons(self) -> None:
-        """Check VR controller buttons and dispatch actions.
-
-        X (left controller, rising edge):  smooth-reset LEFT arm to initial EE pose.
-        A (right controller, rising edge): smooth-reset RIGHT arm to initial EE pose.
-        """
-        # A/B are on the right controller, X/Y are on the left controller.
+        """Check VR controller buttons and dispatch actions."""
         button_to_side = {"left": self.xr_client.get_button("X"), "right": self.xr_client.get_button("A")}
-
         for side in self.sides:
             pressed = button_to_side[side]
             if pressed and not self._reset_btn_prev[side]:
@@ -310,13 +226,11 @@ class YamVrAgent(Agent):
             self._reset_btn_prev[side] = pressed
 
     def _vr_processing_loop(self) -> None:
-        """Read VR controller input and update IK targets at ~100Hz."""
+        """Read VR controller input and update IK targets at ~100 Hz."""
         while True:
             self._handle_buttons()
 
             for side in self.sides:
-                # If a smooth reset is in progress, drive the interpolation
-                # and skip VR input until it finishes.
                 if self._tick_smooth_reset(side):
                     continue
 
@@ -333,13 +247,11 @@ class YamVrAgent(Agent):
                     pos_robot, rot_robot = self._transform_vr_pose(vr_pose)
 
                     if not was_active:
-                        # Just activated — capture references
                         self.ref_vr_pos[side] = pos_robot.copy()
                         self.ref_vr_rot[side] = rot_robot
-                        handle = self.ik.transform_handles[side]
-                        if handle.control is not None:
-                            self.ref_ee_pos[side] = np.array(handle.control.position)
-                            self.ref_ee_rot[side] = vtf.SO3(np.array(handle.control.wxyz))
+                        target = self.ik.get_target(side)
+                        self.ref_ee_pos[side] = target["position"].copy()
+                        self.ref_ee_rot[side] = vtf.SO3(target["wxyz"].copy())
                         continue
 
                     ref_vr_pos = self.ref_vr_pos[side]
@@ -357,40 +269,20 @@ class YamVrAgent(Agent):
                     new_pos = ref_ee_pos + delta_pos
                     new_rot = delta_rot @ ref_ee_rot
 
-                    handle = self.ik.transform_handles[side]
-                    if handle.control is not None:
-                        handle.control.position = tuple(new_pos)  # type: ignore
-                        handle.control.wxyz = new_rot.wxyz  # type: ignore
+                    self.ik.set_target(side, new_pos, new_rot.wxyz)
 
-                    self.vr_status_handles[side].value = f"active | grip={grip_val:.2f}"
                 else:
                     if was_active:
-                        # Just deactivated — clear references
                         self.ref_vr_pos[side] = None
                         self.ref_vr_rot[side] = None
                         self.ref_ee_pos[side] = None
                         self.ref_ee_rot[side] = None
-                    self.vr_status_handles[side].value = "inactive"
 
             time.sleep(0.01)
 
-    def _update_visualization(self) -> None:
-        """Update real robot state visualization in Viser."""
-        while self.obs is None:
-            time.sleep(0.025)
-        while True:
-            if self.bimanual:
-                self.urdf_vis_right_real.update_cfg(np.flip(self.obs["right"]["joint_pos"][:6]))
-            self.urdf_vis_left_real.update_cfg(np.flip(self.obs["left"]["joint_pos"][:6]))
-
-            rgb_images = obs_get_rgb(self.obs)
-            if rgb_images:
-                for key in rgb_images:
-                    if key not in self.viser_cam_img_handles:
-                        self.viser_cam_img_handles[key] = self.viser_server.gui.add_image(rgb_images[key], label=key)
-                    self.viser_cam_img_handles[key].image = resize_with_pad(rgb_images[key], 224, 224)
-
-            time.sleep(0.02)
+    # ------------------------------------------------------------------ #
+    #  Agent interface
+    # ------------------------------------------------------------------ #
 
     def act(self, obs: Dict[str, Any]) -> Any:
         self.obs = deepcopy(obs)
