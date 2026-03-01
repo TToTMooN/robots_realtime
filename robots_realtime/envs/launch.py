@@ -2,9 +2,9 @@
 Main launch script for YAM realtime robot control environment.
 """
 
-import logging
 import os
 import signal
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import tyro
+from loguru import logger
 
 from robots_realtime.agents.agent import Agent
 from robots_realtime.envs.configs.instantiate import instantiate
@@ -82,7 +83,6 @@ def _wait_for_ik_convergence(
     agent: Agent,
     obs: Dict[str, Any],
     robot_names: list,
-    logger: logging.Logger,
 ) -> Dict[str, Any]:
     """Poll agent.act() until the IK solver has fully converged.
 
@@ -137,7 +137,6 @@ def _safe_move_robots(
     robots: Dict[str, Robot],
     targets: Dict[str, np.ndarray],
     duration_s: float = SAFE_MOVE_DURATION_S,
-    logger: Optional[logging.Logger] = None,
 ) -> None:
     """Slowly move robots to target joint positions using linear interpolation.
 
@@ -146,12 +145,10 @@ def _safe_move_robots(
 
     def _move_one(name: str, robot: Robot, target: np.ndarray) -> None:
         try:
-            if logger:
-                logger.info(f"Slowly moving '{name}' to target over {duration_s:.1f}s...")
+            logger.info(f"Slowly moving '{name}' to target over {duration_s:.1f}s...")
             robot.move_joints(target, duration_s)
         except Exception as e:
-            if logger:
-                logger.warning(f"Could not slowly move '{name}': {e}")
+            logger.warning(f"Could not slowly move '{name}': {e}")
 
     threads = []
     for name, robot in robots.items():
@@ -170,18 +167,15 @@ SOFT_RELEASE_DURATION_S = 2.0
 def _safe_release_robots(
     robots: Dict[str, Robot],
     duration_s: float = SOFT_RELEASE_DURATION_S,
-    logger: Optional[logging.Logger] = None,
 ) -> None:
     """Gradually fade gravity compensation then cut power on all robots."""
 
     def _release_one(name: str, robot: Robot) -> None:
         try:
             robot.soft_release(duration_s)
-            if logger:
-                logger.info(f"Soft-released '{name}' over {duration_s:.1f}s")
+            logger.info(f"Soft-released '{name}' over {duration_s:.1f}s")
         except Exception as e:
-            if logger:
-                logger.warning(f"soft_release failed for '{name}', falling back to zero_torque_mode: {e}")
+            logger.warning(f"soft_release failed for '{name}', falling back to zero_torque_mode: {e}")
             try:
                 robot.zero_torque_mode()
             except Exception:
@@ -213,7 +207,7 @@ def main(args: Args) -> None:
     """
     global _shutdown_requested
 
-    logger = setup_logging()
+    setup_logging()
     logger.info("Starting realtime control system...")
 
     server_processes = []
@@ -238,7 +232,7 @@ def main(args: Args) -> None:
         if api_servers is not None:
             for api_server in api_servers:
                 server_proc = run_server_proc(api_server)
-                print(f"API server {api_server} started")
+                logger.info(f"API server {api_server} started")
                 server_procs.append(server_proc)
         main_config = instantiate(configs_dict)
 
@@ -284,7 +278,7 @@ def main(args: Args) -> None:
 
         # Wait for the IK solver to JIT-compile and converge before reading
         # the initial target.  Without this, pyroki returns np.zeros(6).
-        initial_action = _wait_for_ik_convergence(agent, obs, list(robots.keys()), logger)
+        initial_action = _wait_for_ik_convergence(agent, obs, list(robots.keys()))
 
         initial_targets = {}
         for name in robots:
@@ -293,7 +287,7 @@ def main(args: Args) -> None:
 
         if initial_targets:
             logger.info("Moving to initial teleop pose (safe slow motion)...")
-            _safe_move_robots(robots, initial_targets, logger=logger)
+            _safe_move_robots(robots, initial_targets)
 
         logger.info("Starting control loop...")
         _run_control_loop(env, agent, main_config)
@@ -312,8 +306,8 @@ def main(args: Args) -> None:
         if saved_positions and robots:
             try:
                 logger.info("Returning to pre-teleop positions (safe slow motion)...")
-                _safe_move_robots(robots, saved_positions, logger=logger)
-                _safe_release_robots(robots, logger=logger)
+                _safe_move_robots(robots, saved_positions)
+                _safe_release_robots(robots)
             except KeyboardInterrupt:
                 logger.warning("Shutdown interrupted, cutting power immediately...")
                 for name, robot in robots.items():
@@ -341,7 +335,6 @@ def _run_sim_control_loop(
 
     Runs entirely in-process so the MuJoCo viewer stays on the main thread.
     """
-    logger = logging.getLogger(__name__)
     rate = Rate(config.hz, rate_name="sim_control_loop")
     steps = 0
     start_time = time.time()
@@ -376,14 +369,18 @@ def _run_sim_control_loop(
             loop_count += 1
             elapsed_time = time.time() - start_time
             if elapsed_time >= 1:
-                logger.info(f"Sim control loop: {loop_count / elapsed_time:.2f} Hz")
+                hz = loop_count / elapsed_time
+                sys.stderr.write(f"\r  Sim control loop: {hz:.1f} Hz | step {steps}  ")
+                sys.stderr.flush()
                 start_time = time.time()
                 loop_count = 0
 
             if config.max_steps is not None and steps >= config.max_steps:
+                sys.stderr.write("\n")
                 logger.info(f"Reached max steps ({config.max_steps}), stopping...")
                 break
     except KeyboardInterrupt:
+        sys.stderr.write("\n")
         logger.info("Interrupted.")
     finally:
         if hasattr(agent, "close"):
@@ -395,7 +392,6 @@ def _run_sim_control_loop(
 
 def _run_control_loop(env: RobotEnv, agent: Agent, config: LaunchConfig) -> None:
     """Run the main control loop.  Exits when _shutdown_requested is set by SIGINT."""
-    logger = logging.getLogger(__name__)
     steps = 0
     start_time = time.time()
     loop_count = 0
@@ -414,15 +410,18 @@ def _run_control_loop(env: RobotEnv, agent: Agent, config: LaunchConfig) -> None
 
         elapsed_time = time.time() - start_time
         if elapsed_time >= 1:
-            calculated_frequency = loop_count / elapsed_time
-            logger.info(f"Control loop frequency: {calculated_frequency:.2f} Hz")
+            hz = loop_count / elapsed_time
+            sys.stderr.write(f"\r  Control loop: {hz:.1f} Hz | step {steps}  ")
+            sys.stderr.flush()
             start_time = time.time()
             loop_count = 0
 
         if config.max_steps is not None and steps >= config.max_steps:
+            sys.stderr.write("\n")
             logger.info(f"Reached max steps ({config.max_steps}), stopping...")
             break
 
+    sys.stderr.write("\n")
     if _shutdown_requested:
         logger.info("Shutdown flag detected, exiting control loop.")
 

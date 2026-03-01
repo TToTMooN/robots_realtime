@@ -1,7 +1,6 @@
-import logging
 import os
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def set_realtime_and_pin(pinned_cpu: int):
