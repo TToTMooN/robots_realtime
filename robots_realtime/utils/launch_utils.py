@@ -51,7 +51,7 @@ def run_server_proc(api_cfg) -> multiprocessing.Process:
     return proc
 
 
-def setup_logging() -> None:
+def setup_logging(level: str = "INFO") -> None:
     """Configure loguru as the sole logging backend.
 
     Replaces the default loguru sink with a clean format and installs an
@@ -62,7 +62,7 @@ def setup_logging() -> None:
     logger.add(
         sys.stderr,
         format="<level>{time:HH:mm:ss.SSS} | {level:<7} | {file}:{line} - {message}</level>",
-        level="DEBUG",
+        level=level.upper(),
         colorize=True,
     )
 

@@ -66,6 +66,7 @@ class LaunchConfig:
 @dataclass
 class Args:
     config_path: Tuple[str, ...] = ("~/yam_realtime/configs/yam_viser_bimanual.yaml",)
+    log_level: str = "INFO"
 
 
 def _save_robot_positions(obs: Dict[str, Any], robot_names: list) -> Dict[str, np.ndarray]:
@@ -209,7 +210,7 @@ def main(args: Args) -> None:
     """
     global _shutdown_requested
 
-    setup_logging()
+    setup_logging(level=args.log_level)
     logger.info("Starting realtime control system...")
 
     server_processes = []
