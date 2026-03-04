@@ -225,3 +225,7 @@ uv run ruff format robots_realtime/    # format
 ```
 
 Python 3.11 | Package manager: `uv` | Linter: `ruff` (line length 119)
+
+## Acknowledgments
+
+Some structure is inspired by [GELLO](https://github.com/wuphilipp/gello_software) and [robots_realtime](https://github.com/uynitsuj/robots_realtime).
