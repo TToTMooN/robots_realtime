@@ -411,32 +411,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dm-control"
-version = "1.0.30"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py" },
-    { name = "dm-env" },
-    { name = "dm-tree" },
-    { name = "glfw" },
-    { name = "labmaze" },
-    { name = "lxml" },
-    { name = "mujoco" },
-    { name = "numpy" },
-    { name = "protobuf" },
-    { name = "pyopengl" },
-    { name = "pyparsing" },
-    { name = "requests" },
-    { name = "scipy" },
-    { name = "setuptools" },
-    { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/30/28/e67835eee1cbd9b16ef389637a7c538eb4f1107214426eab073f4d2e0426/dm_control-1.0.30.tar.gz", hash = "sha256:26d72e7917f0e4383b51b089f3176a706426537d51b0c2f36ecb1fd7c493b47e", size = 56267749, upload-time = "2025-04-30T16:14:30.286Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/20/54b4097d48511d300cc4ff009fd0f687cdf65336b799b4f8fd2630f6d2bb/dm_control-1.0.30-py3-none-any.whl", hash = "sha256:e66dc23ef1e4e8aef054de3857bcb7e9fad260f495ba4b6445b325d2b90e976a", size = 56439166, upload-time = "2025-04-30T16:14:25.399Z" },
-]
-
-[[package]]
 name = "dm-env"
 version = "1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -889,24 +863,6 @@ wheels = [
 ]
 
 [[package]]
-name = "labmaze"
-version = "1.0.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py" },
-    { name = "numpy" },
-    { name = "setuptools" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/93/0a/139c4ae896b9413bd4ca69c62b08ee98dcfc78a9cbfdb7cadd0dce2ad31d/labmaze-1.0.6.tar.gz", hash = "sha256:2e8de7094042a77d6972f1965cf5c9e8f971f1b34d225752f343190a825ebe73", size = 4670455, upload-time = "2022-12-05T18:42:43.566Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/3c/cdc95db2aa8cd80c193b7b30b9a9be071897c4f0b558d5fc007b1adf74c3/labmaze-1.0.6-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:a0c2cb9dec971814ea9c5d7150af15fa3964482131fa969e0afb94bd224348af", size = 4815406, upload-time = "2022-12-05T18:42:00.412Z" },
-    { url = "https://files.pythonhosted.org/packages/75/46/eb96e23ccddd40f403cea3f9f5d15eae7759317a1762b761692541edd6d9/labmaze-1.0.6-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2c6ba9538d819543f4be448d36b4926a3881e53646a2b331ebb5a1f353047d05", size = 4806777, upload-time = "2022-12-05T18:42:02.345Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/7e/787e0d3c17e29a46484158460e21fcf5cd7a076c81b2ec31807f2753ea43/labmaze-1.0.6-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:70635d1cdb0147a02efb6b3f607a52cdc51723bc3dcc42717a0d4ef55fa0a987", size = 4871563, upload-time = "2022-12-05T18:42:04.538Z" },
-    { url = "https://files.pythonhosted.org/packages/a7/ce/be3952d7036b009f6dd004b6f5dfe97bbff79572ef0cf56a734aaead030f/labmaze-1.0.6-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ff472793238bd9b6dabea8094594d6074ad3c111455de3afcae72f6c40c6817e", size = 4875913, upload-time = "2022-12-05T18:42:06.969Z" },
-    { url = "https://files.pythonhosted.org/packages/50/a5/8c9f9be038401a31f9f87bd44f28c8edff63c0c3f1168ca882e351215761/labmaze-1.0.6-cp311-cp311-win_amd64.whl", hash = "sha256:2317e65e12fa3d1abecda7e0488dab15456cee8a2e717a586bfc8f02a91579e7", size = 4813089, upload-time = "2022-12-05T18:42:09.481Z" },
-]
-
-[[package]]
 name = "libcoal"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1137,18 +1093,6 @@ wheels = [
 ]
 
 [[package]]
-name = "minimalmodbus"
-version = "2.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pyserial" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/37/fc/8a58f7bcdece751f16a4a9aac780acd1288aa8ac6adbffdd764c88fb71c6/minimalmodbus-2.1.1.tar.gz", hash = "sha256:c3f5a56e107d537e4bb420f7e735841ab2939c8ca6fb528f5fe4124571315b64", size = 102512, upload-time = "2023-07-17T19:51:19.184Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/25/7b/b73ba3ec36687341e37a1c9df0ebec3e3b2b0f8d6ae14e109ec5076ebe58/minimalmodbus-2.1.1-py3-none-any.whl", hash = "sha256:75c677e2f3ea901b762f8b2ab7cf8ad84de915bbea275d66e30b724e23887b1a", size = 32335, upload-time = "2023-07-17T19:51:16.707Z" },
-]
-
-[[package]]
 name = "mink"
 version = "0.0.13"
 source = { registry = "https://pypi.org/simple" }
@@ -1362,35 +1306,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/a1/d4/1fc4078c65507b51b
 wheels = [
     { url = "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484", size = 66469, upload-time = "2025-04-19T11:48:57.875Z" },
 ]
-
-[[package]]
-name = "panda-python"
-version = "0.7.5+libfranka.0.10.0"
-source = { path = "dependencies/panda_py_0.7.5_libfranka_0.10.0/panda_python-0.7.5+libfranka.0.10.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
-dependencies = [
-    { name = "numpy" },
-    { name = "requests" },
-    { name = "websockets" },
-]
-wheels = [
-    { filename = "panda_python-0.7.5+libfranka.0.10.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:501e94905a0adb1dd495909e7b3b317755ff0857a11c057a0614de67385d7165" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ansitable", marker = "extra == 'examples'" },
-    { name = "furo", marker = "extra == 'docs'" },
-    { name = "matplotlib", marker = "extra == 'examples'" },
-    { name = "numpy" },
-    { name = "qpsolvers", marker = "extra == 'examples'" },
-    { name = "requests" },
-    { name = "roboticstoolbox-python", marker = "extra == 'examples'" },
-    { name = "spatialmath-python", marker = "extra == 'examples'" },
-    { name = "sphinx", marker = "extra == 'docs'" },
-    { name = "sphinx-reredirects", marker = "extra == 'docs'" },
-    { name = "websockets", specifier = ">=11.0" },
-]
-provides-extras = ["examples", "docs"]
 
 [[package]]
 name = "pillow"
@@ -1809,17 +1724,14 @@ name = "robots-realtime"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "dm-control" },
     { name = "dm-env" },
     { name = "dotdict" },
     { name = "dynamixel-sdk" },
-    { name = "evdev" },
     { name = "fastapi" },
     { name = "i2rt" },
     { name = "jaxls" },
     { name = "loguru" },
     { name = "matplotlib" },
-    { name = "minimalmodbus" },
     { name = "msgpack" },
     { name = "msgpack-numpy" },
     { name = "numpy" },
@@ -1840,9 +1752,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-franka-panda = [
-    { name = "panda-python" },
-]
 sensors = [
     { name = "pyzed" },
 ]
@@ -1854,23 +1763,19 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dm-control", specifier = "==1.0.30" },
     { name = "dm-env", specifier = "==1.6" },
     { name = "dotdict", specifier = "==0.1" },
     { name = "dynamixel-sdk" },
-    { name = "evdev" },
     { name = "fastapi" },
     { name = "i2rt", editable = "dependencies/i2rt" },
     { name = "jaxls", git = "https://github.com/brentyi/jaxls.git" },
     { name = "loguru" },
     { name = "matplotlib" },
-    { name = "minimalmodbus" },
     { name = "msgpack" },
     { name = "msgpack-numpy" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "opencv-contrib-python" },
-    { name = "panda-python", marker = "extra == 'franka-panda'", path = "dependencies/panda_py_0.7.5_libfranka_0.10.0/panda_python-0.7.5+libfranka.0.10.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "pin-pink" },
     { name = "portal" },
     { name = "pyrealsense2" },
@@ -1885,7 +1790,7 @@ requires-dist = [
     { name = "xdof-sdk" },
     { name = "yourdfpy" },
 ]
-provides-extras = ["sensors", "franka-panda"]
+provides-extras = ["sensors"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.12.3" }]
@@ -1992,15 +1897,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/39/c1/1903de608c0c924a1749c590064e65810f8046e437aba6be365abc4f7557/scipy-1.16.3-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:deb3841c925eeddb6afc1e4e4a45e418d19ec7b87c5df177695224078e8ec733", size = 38878540, upload-time = "2025-10-28T17:32:23.907Z" },
     { url = "https://files.pythonhosted.org/packages/f1/d0/22ec7036ba0b0a35bccb7f25ab407382ed34af0b111475eb301c16f8a2e5/scipy-1.16.3-cp311-cp311-win_amd64.whl", hash = "sha256:53c3844d527213631e886621df5695d35e4f6a75f620dca412bcd292f6b87d78", size = 38722107, upload-time = "2025-10-28T17:32:29.921Z" },
     { url = "https://files.pythonhosted.org/packages/7b/60/8a00e5a524bb3bf8898db1650d350f50e6cffb9d7a491c561dc9826c7515/scipy-1.16.3-cp311-cp311-win_arm64.whl", hash = "sha256:9452781bd879b14b6f055b26643703551320aa8d79ae064a71df55c00286a184", size = 25506272, upload-time = "2025-10-28T17:32:34.577Z" },
-]
-
-[[package]]
-name = "setuptools"
-version = "80.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/18/5d/3bf57dcd21979b887f014ea83c24ae194cfcd12b9e0fda66b957c69d1fca/setuptools-80.9.0.tar.gz", hash = "sha256:f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c", size = 1319958, upload-time = "2025-05-27T00:56:51.443Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl", hash = "sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922", size = 1201486, upload-time = "2025-05-27T00:56:49.664Z" },
 ]
 
 [[package]]
