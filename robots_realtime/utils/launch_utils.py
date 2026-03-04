@@ -4,12 +4,14 @@ Utilities for launching and configuring robots, sensors, and agents.
 
 import logging
 import subprocess
+import sys
 import time
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import omegaconf
 import portal
+from loguru import logger
 
 from robots_realtime.envs.configs.instantiate import instantiate
 from robots_realtime.envs.configs.loader import DictLoader
@@ -22,8 +24,19 @@ from robots_realtime.utils.portal_utils import (
 import multiprocessing
 
 
-# Create logger for this module
-logger = logging.getLogger(__name__)
+class _InterceptHandler(logging.Handler):
+    """Route stdlib logging calls into loguru."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno  # type: ignore[assignment]
+        frame, depth = sys._getframe(6), 6
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back  # type: ignore[assignment]
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def run_server_proc(api_cfg) -> multiprocessing.Process:
@@ -38,27 +51,22 @@ def run_server_proc(api_cfg) -> multiprocessing.Process:
     return proc
 
 
-def setup_logging() -> logging.Logger:
-    """
-    Setup logging configuration.
+def setup_logging(level: str = "INFO") -> None:
+    """Configure loguru as the sole logging backend.
 
-    Returns:
-        Logger instance for the main module
+    Replaces the default loguru sink with a clean format and installs an
+    intercept handler so that stdlib ``logging`` calls from third-party
+    libraries (portal, omegaconf, etc.) are routed through loguru.
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(filename)s:%(lineno)d - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-        ],
-        force=True,  # Force reconfiguration of logging
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        format="<level>{time:HH:mm:ss.SSS} | {level:<7} | {file}:{line} - {message}</level>",
+        level=level.upper(),
+        colorize=True,
     )
 
-    # Create and return a logger for the main module
-    main_logger = logging.getLogger("__main__")
-    main_logger.setLevel(logging.INFO)
-
-    return main_logger
+    logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
 
 
 def setup_can_interfaces():

@@ -30,7 +30,37 @@ uv venv --python 3.11
 uv pip install -e .
 ```
 ## Configuration
-If using YAM arms, configure YAM arms CAN chain according to instructions from the [I2RT repo](https://github.com/i2rt-robotics/i2rt)
+
+### CAN Interface (YAM arms)
+Configure YAM arms CAN chain according to instructions from the [I2RT repo](https://github.com/i2rt-robotics/i2rt).
+
+To avoid needing `sudo` every launch, set up a udev rule that auto-configures CAN interfaces on plug-in:
+```bash
+echo 'SUBSYSTEM=="net", KERNEL=="can*", ACTION=="add", RUN+="/sbin/ip link set %k up type can bitrate 1000000"' | sudo tee /etc/udev/rules.d/99-can.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+This only needs to be done once. After that, CAN interfaces are brought up automatically at 1000000bps.
+
+### Camera Test
+Test connected RealSense cameras with the diagnostic viewer:
+```bash
+uv run python scripts/test_realsense_cameras.py
+```
+Interactive picker lets you choose a camera. Additional options:
+- `--show-serial` show serial number overlay
+- `--depth` show colorized depth stream
+- `--flip-ud` / `--flip-lr` flip image
+- `r` key to start/stop recording, `s` to toggle serial overlay, `q` to quit
+
+### GELLO Server (Network Teleop)
+For network-based GELLO teleop (`yam_gello_network_bimanual.yaml`), the position server must be running on the R1 Lite Teleop onboard computer. A helper script handles kill/copy/start over SSH:
+```bash
+bash scripts/start_gello_server.sh            # start on default host (10.42.0.1)
+bash scripts/start_gello_server.sh 10.42.0.2  # custom host
+bash scripts/start_gello_server.sh --kill      # kill remote server
+```
+The server runs in a detached `screen` session. View logs with `ssh cat@10.42.0.1 'screen -r gello_server'`.
 
 ## Launch
 Then run the launch entrypoint script with an appropriate robot config file.

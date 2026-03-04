@@ -7,9 +7,10 @@ import numpy as np
 import viser
 import viser.extras
 from dm_env.specs import Array
+from loguru import logger
 
 from robots_realtime.agents.agent import Agent
-from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
+from robots_realtime.robots.viser.viser_monitor import ViserMonitor
 from robots_realtime.utils.portal_utils import remote
 
 
@@ -41,10 +42,14 @@ class YamViserAgent(Agent):
             assert right_arm_extrinsic is not None, "right_arm_extrinsic must be provided for bimanual robot"
         self.viser_server = viser.ViserServer()
         self.ik = _create_ik_solver(ik_solver, ik_params=ik_params, viser_server=self.viser_server, bimanual=bimanual)
+
+        # Shared monitor handles camera feeds + recording on the same server
+        self._monitor = ViserMonitor(self.viser_server)
+
         self.ik_thread = threading.Thread(target=self.ik.run)
         self.ik_thread.start()
         self.obs = None
-        self.real_vis_thread = threading.Thread(target=self._update_visualization)
+        self.real_vis_thread = threading.Thread(target=self._update_visualization, daemon=True)
         self.real_vis_thread.start()
         self._setup_visualization()
 
@@ -81,29 +86,21 @@ class YamViserAgent(Agent):
                 "Right Gripper", min=0.0, max=2.4, step=0.01, initial_value=0.0
             )
 
-        self.viser_cam_img_handles = {}
-
     def _update_visualization(self):
+        """Update real robot state URDF overlay from observations."""
         while self.obs is None:
             time.sleep(0.025)
         while True:
             if self.bimanual:
                 self.urdf_vis_right_real.update_cfg(np.flip(self.obs["right"]["joint_pos"]))
             self.urdf_vis_left_real.update_cfg(np.flip(self.obs["left"]["joint_pos"]))
-
-            # Extract RGB images from observation (if any)
-            rgb_images = obs_get_rgb(self.obs)
-            if rgb_images:
-                for key in rgb_images.keys():
-                    if key not in self.viser_cam_img_handles.keys():
-                        self.viser_cam_img_handles[key] = self.viser_server.gui.add_image(rgb_images[key], label=key)
-                    # resize viser images to 224x224
-                    self.viser_cam_img_handles[key].image = resize_with_pad(rgb_images[key], 224, 224)
-
             time.sleep(0.02)
 
     def act(self, obs: Dict[str, Any]) -> Any:
         self.obs = deepcopy(obs)
+
+        # Feed camera images to monitor
+        self._monitor.update(obs)
 
         action = {
             "left": {
@@ -119,6 +116,9 @@ class YamViserAgent(Agent):
             }
 
         return action
+
+    def close(self) -> None:
+        self._monitor.close()
 
     @remote(serialization_needed=True)
     def action_spec(self) -> Dict[str, Dict[str, Array]]:

@@ -1,8 +1,8 @@
-import logging
 import signal
-import sys
 import time
 from typing import Optional
+
+from loguru import logger
 
 TIMEOUT_INIT = False
 
@@ -32,11 +32,8 @@ class Timeout:
             else:
                 raise TimeoutError(f"Operation timed out after {self.seconds} seconds")
         elif self.mode == "warning":
-            message = "\033[91m[WARNING]\033[0m Operation"
-            if self.name:
-                message += f" '{self.name}'"
-            message += f" exceeded {self.seconds} seconds but continues."
-            print(message, file=sys.stderr)
+            op = f"'{self.name}' " if self.name else ""
+            logger.warning(f"Operation {op}exceeded {self.seconds} seconds but continues.")
 
     def __enter__(self):
         """
@@ -60,10 +57,12 @@ class Timeout:
 
 
 class Rate:
-    def __init__(self, rate: Optional[float], rate_name: Optional[str] = None):
+    def __init__(self, rate: Optional[float], rate_name: Optional[str] = None, warn_tolerance: float = 0.1):
         self.last = time.time()
-        self.rate = rate  # when rate is None, it means we are not using rate control
+        self.rate = rate
         self.rate_name = rate_name
+        self.warn_tolerance = warn_tolerance
+        self._first = True
 
     @property
     def dt(self) -> float:
@@ -74,13 +73,16 @@ class Rate:
     def sleep(self) -> None:
         if self.rate is None:
             return
-        if self.last + self.dt < time.time() - 0.001:
-            logging.warning(
-                f"Already behind schedule {self.rate_name} by {time.time() - (self.last + self.dt)} seconds"
+        overrun = time.time() - (self.last + self.dt)
+        if overrun > self.warn_tolerance and not self._first:
+            logger.warning(
+                f"Behind schedule {self.rate_name} by {overrun:.4f}s "
+                f"(tolerance {self.warn_tolerance}s)"
             )
         else:
-            needed_sleep = max(0, self.last + self.dt - time.time() - 0.0001)  # 0.0001 is the time it takes to sleep
+            needed_sleep = max(0, self.last + self.dt - time.time() - 0.0001)
             time.sleep(needed_sleep)
+        self._first = False
         self.last = time.time()
 
 
