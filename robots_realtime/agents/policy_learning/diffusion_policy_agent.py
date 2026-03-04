@@ -1,15 +1,38 @@
 # type: ignore
 import collections
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 from dm_env.specs import Array
-from robots_realtime.data.data_utils import recusive_flatten, reverse_flatten
 
 from robots_realtime.agents.agent import PolicyAgent
 from robots_realtime.agents.constants import ActionSpec
 from robots_realtime.utils.portal_utils import remote
+
+
+def _recursive_flatten(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+    """Flatten a nested dict with ``-`` as the separator."""
+    flat: Dict[str, Any] = {}
+    for k, v in d.items():
+        key = f"{prefix}-{k}" if prefix else k
+        if isinstance(v, dict):
+            flat.update(_recursive_flatten(v, key))
+        else:
+            flat[key] = v
+    return flat
+
+
+def _reverse_flatten(d: Dict[str, Any], sep: str = "-") -> Dict[str, Any]:
+    """Unflatten a dict whose keys were joined with *sep*."""
+    result: Dict[str, Any] = {}
+    for k, v in d.items():
+        parts = k.split(sep)
+        node = result
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = v
+    return result
 
 
 class AsyncDiffusionAgent(PolicyAgent):
@@ -29,7 +52,7 @@ class AsyncDiffusionAgent(PolicyAgent):
 
     @remote()
     def act(self, obs):
-        action = reverse_flatten(self(obs))["action"]
+        action = _reverse_flatten(self(obs))["action"]
 
         return {
             "left": {"pos": action["left"]["pos"]},
@@ -57,7 +80,7 @@ class AsyncDiffusionAgent(PolicyAgent):
             }
 
     def __call__(self, obs):
-        obs = recusive_flatten(obs)
+        obs = _recursive_flatten(obs)
         with self.obs_deque_lock:
             if self.obs_deque is None:
                 self.obs_deque = collections.deque([obs] * self.obs_horizon, maxlen=self.obs_horizon)

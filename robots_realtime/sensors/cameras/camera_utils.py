@@ -60,21 +60,25 @@ def plot_camera_read(camera: Any, save_datastream: bool = False, vis: bool = Tru
             break
 
 
-def obs_get_rgb(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
-    """
-    Recursively search through observation dictionary to find RGB images.
+def obs_get_rgb(obs: Any) -> Dict[str, np.ndarray]:
+    """Extract RGB images from an observation (typed ``Observation`` or legacy dict).
 
     Args:
-        obs: Observation dictionary that may contain nested camera data
+        obs: ``Observation`` dataclass **or** a nested observation dictionary.
 
     Returns:
-        Dictionary mapping camera names to RGB image arrays
+        Dictionary mapping camera names to RGB image arrays.
     """
-    rgb_dict = {}
+    # Typed Observation path
+    from robots_realtime.core.observation import Observation
 
+    if isinstance(obs, Observation):
+        return {name: cam.rgb for name, cam in obs.cameras.items()}
+
+    # Legacy dict path — recursive search
+    rgb_dict: Dict[str, np.ndarray] = {}
     for key, value in obs.items():
         if isinstance(value, dict):
-            # Check if this dict contains images with rgb data
             if "images" in value and isinstance(value["images"], dict):
                 if "rgb" in value["images"]:
                     rgb_dict[key] = value["images"]["rgb"]
@@ -83,48 +87,63 @@ def obs_get_rgb(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
                 elif "right_rgb" in value["images"]:
                     rgb_dict[key] = value["images"]["right_rgb"]
             else:
-                # Recursively search in nested dictionaries
                 nested_rgb = obs_get_rgb(value)
                 rgb_dict.update(nested_rgb)
-
     return rgb_dict
 
 
-def obs_get_camera_data(obs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """
-    Extract all camera data (not just RGB) from observation dictionary.
+def obs_get_camera_data(obs: Any) -> Dict[str, Dict[str, Any]]:
+    """Extract all camera data from an observation (typed ``Observation`` or legacy dict).
 
     Args:
-        obs: Observation dictionary that may contain nested camera data
+        obs: ``Observation`` dataclass **or** a nested observation dictionary.
 
     Returns:
-        Dictionary mapping camera names to their full camera data
+        Dictionary mapping camera names to their full camera data.
     """
-    camera_dict = {}
+    from robots_realtime.core.observation import Observation
 
+    if isinstance(obs, Observation):
+        result: Dict[str, Dict[str, Any]] = {}
+        for name, cam in obs.cameras.items():
+            images: Dict[str, np.ndarray] = {"rgb": cam.rgb}
+            if cam.depth is not None:
+                images["depth"] = cam.depth
+            if cam.left_rgb is not None:
+                images["left_rgb"] = cam.left_rgb
+            if cam.right_rgb is not None:
+                images["right_rgb"] = cam.right_rgb
+            entry: Dict[str, Any] = {"images": images, "timestamp": cam.timestamp}
+            if cam.intrinsics is not None:
+                entry["intrinsics"] = cam.intrinsics
+            result[name] = entry
+        return result
+
+    # Legacy dict path — recursive search
+    camera_dict: Dict[str, Dict[str, Any]] = {}
     for key, value in obs.items():
         if isinstance(value, dict):
-            # Check if this looks like camera data (has images and timestamp)
             if "images" in value and "timestamp" in value:
                 camera_dict[key] = value
             else:
-                # Recursively search in nested dictionaries
                 nested_cameras = obs_get_camera_data(value)
                 camera_dict.update(nested_cameras)
-
     return camera_dict
 
 
-def obs_has_cameras(obs: Dict[str, Any]) -> bool:
-    """
-    Check if observation dictionary contains any camera data.
+def obs_has_cameras(obs: Any) -> bool:
+    """Check if observation contains any camera data.
 
     Args:
-        obs: Observation dictionary
+        obs: ``Observation`` dataclass **or** observation dictionary.
 
     Returns:
-        True if cameras are found, False otherwise
+        True if cameras are found, False otherwise.
     """
+    from robots_realtime.core.observation import Observation
+
+    if isinstance(obs, Observation):
+        return len(obs.cameras) > 0
     return len(obs_get_camera_data(obs)) > 0
 
 

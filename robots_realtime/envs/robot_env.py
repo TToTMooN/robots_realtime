@@ -3,6 +3,11 @@ from typing import Any, Dict, Optional, Union
 
 import dm_env
 
+from robots_realtime.core.observation import (
+    Observation,
+    arm_obs_from_dict,
+    camera_obs_from_dict,
+)
 from robots_realtime.robots.robot import Robot
 from robots_realtime.robots.utils import Rate
 from robots_realtime.sensors.cameras.camera import CameraDriver
@@ -54,14 +59,14 @@ class RobotEnv(dm_env.Environment):
                 else:
                     self._robot_dict[name].command_joint_pos(action["pos"])
 
-    def step(self, action: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:  # type: ignore
+    def step(self, action: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Observation:  # type: ignore
         """Step the environment forward.
 
         Args:
             action: action to step the environment with.
 
         Returns:
-            obs: observation from the environment.
+            obs: typed Observation from the environment.
         """
         if len(action) != 0:
             # get action at time t
@@ -70,14 +75,13 @@ class RobotEnv(dm_env.Environment):
         # return observation at time t+1
         return self.get_obs()
 
-    def get_obs(self) -> Dict[str, Any]:
+    def get_obs(self) -> Observation:
         """Get observation from the environment.
 
         Returns:
-            obs: observation from the environment.
+            obs: typed Observation from the environment.
         """
-        observations = {}
-        observations["timestamp"] = time.time()
+        timestamp = time.time()
 
         assert self._camera_dict is not None, "Camera dictionary is not set."
         clients = list(self._camera_dict.values()) + list(self._robot_dict.values())
@@ -92,25 +96,24 @@ class RobotEnv(dm_env.Environment):
                 robot_obs = robot.get_observations()
                 robot_futures[name] = robot_obs
 
+        arms: Dict[str, Any] = {}
         for name, robot_obs_future in robot_futures.items():
-            # start_time = time.time()
             robot_obs = robot_obs_future.result()
-            observations[name] = robot_obs
-            # end_time = time.time()
-            # print(f"time taken to get robot data for {name}: {(end_time - start_time) * 1000} ms")
+            arms[name] = arm_obs_from_dict(robot_obs)
 
+        cameras: Dict[str, Any] = {}
         for name, camera_data_future in camera_futures.items():
-            # start_time = time.time()
             camera_data = camera_data_future.result()
-            assert name not in observations
-            observations[name] = camera_data
-            # end_time = time.time()
-            # print(f"time taken to get camera data for {name}: {(end_time - start_time) * 1000} ms")
-        observations["timestamp_end"] = time.time()
+            cameras[name] = camera_obs_from_dict(camera_data)
 
-        return observations
+        return Observation(
+            timestamp=timestamp,
+            arms=arms,
+            cameras=cameras,
+            extra={"timestamp_end": time.time()},
+        )
 
-    def reset(self) -> Dict[str, Any]:  # type: ignore
+    def reset(self) -> Observation:  # type: ignore
         return self.get_obs()
 
     def observation_spec(self):  # type: ignore

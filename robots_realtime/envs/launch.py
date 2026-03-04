@@ -15,6 +15,7 @@ import tyro
 from loguru import logger
 
 from robots_realtime.agents.agent import Agent
+from robots_realtime.core.observation import Observation, arm_obs_from_dict
 from robots_realtime.envs.configs.instantiate import instantiate
 from robots_realtime.envs.configs.loader import DictLoader
 from robots_realtime.envs.robot_env import RobotEnv
@@ -27,9 +28,9 @@ from robots_realtime.utils.launch_utils import (
     initialize_agent,
     initialize_robots,
     initialize_sensors,
+    run_server_proc,
     setup_can_interfaces,
     setup_logging,
-    run_server_proc,
 )
 
 SAFE_MOVE_DURATION_S = 1.0
@@ -69,22 +70,26 @@ class Args:
     log_level: str = "INFO"
 
 
-def _save_robot_positions(obs: Dict[str, Any], robot_names: list) -> Dict[str, np.ndarray]:
+def _save_robot_positions(obs: Observation, robot_names: list) -> Dict[str, np.ndarray]:
     """Capture current joint positions (arm + gripper) from observations."""
     saved = {}
     for name in robot_names:
-        if name not in obs:
+        arm = obs.arms.get(name)
+        if arm is None:
             continue
-        joint_pos = obs[name].get("joint_pos", np.array([]))
-        gripper_pos = obs[name].get("gripper_pos", np.array([]))
+        joint_pos = arm.joint_pos
+        gripper_pos = arm.gripper_pos
         if joint_pos.size > 0:
-            saved[name] = np.concatenate([joint_pos, gripper_pos]) if gripper_pos.size > 0 else joint_pos.copy()
+            if gripper_pos is not None and gripper_pos.size > 0:
+                saved[name] = np.concatenate([joint_pos, gripper_pos])
+            else:
+                saved[name] = joint_pos.copy()
     return saved
 
 
 def _wait_for_ik_convergence(
     agent: Agent,
-    obs: Dict[str, Any],
+    obs: Observation,
     robot_names: list,
 ) -> Dict[str, Any]:
     """Poll agent.act() until the IK solver has fully converged.
@@ -96,13 +101,14 @@ def _wait_for_ik_convergence(
     On first call the JAX JIT in pyroki can take several seconds to compile.
     """
     logger.info("Waiting for IK solver to warm up and converge...")
+    obs_dict = obs.to_dict()
     deadline = time.time() + IK_WARMUP_TIMEOUT_S
     prev_joints: Dict[str, np.ndarray] = {}
     stable_count = 0
     STABLE_THRESHOLD = 5  # consecutive stable readings required
 
     while time.time() < deadline:
-        action = agent.act(obs)
+        action = agent.act(obs_dict)
 
         all_nonzero = True
         all_stable = True
@@ -133,7 +139,7 @@ def _wait_for_ik_convergence(
         time.sleep(IK_WARMUP_POLL_S)
 
     logger.warning(f"IK solver did not fully converge within {IK_WARMUP_TIMEOUT_S}s, proceeding with current values.")
-    return agent.act(obs)
+    return agent.act(obs_dict)
 
 
 def _safe_move_robots(
@@ -305,7 +311,7 @@ def main(args: Args) -> None:
             initial_action = _wait_for_ik_convergence(agent, obs, list(robots.keys()))
         else:
             logger.info("Agent does not use IK, skipping convergence wait.")
-            initial_action = agent.act(obs)
+            initial_action = agent.act(obs.to_dict())
 
         initial_targets = {}
         for name in robots:
@@ -369,9 +375,12 @@ def _run_sim_control_loop(
     start_time = time.time()
     loop_count = 0
 
+    def _build_sim_obs() -> Observation:
+        arms = {name: arm_obs_from_dict(robot.get_observations()) for name, robot in robots.items()}
+        return Observation(timestamp=time.time(), arms=arms)
+
     # Build initial observation from robots
-    obs = {name: robot.get_observations() for name, robot in robots.items()}
-    obs["timestamp"] = time.time()
+    obs = _build_sim_obs()
 
     try:
         while True:
@@ -381,7 +390,7 @@ def _run_sim_control_loop(
                     logger.info("Viewer closed, stopping...")
                     return
 
-            action = agent.act(obs)
+            action = agent.act(obs.to_dict())
 
             # Apply actions directly
             for name, act in action.items():
@@ -391,8 +400,7 @@ def _run_sim_control_loop(
             rate.sleep()
 
             # Collect observations
-            obs = {name: robot.get_observations() for name, robot in robots.items()}
-            obs["timestamp"] = time.time()
+            obs = _build_sim_obs()
 
             steps += 1
             loop_count += 1
@@ -434,7 +442,7 @@ def _run_control_loop(
 
     while not _shutdown_requested:
         with Timeout(30, "Agent action"):
-            action = agent.act(obs)
+            action = agent.act(obs.to_dict())
 
         with Timeout(1, "Env step", "warning"):
             obs = env.step(action)

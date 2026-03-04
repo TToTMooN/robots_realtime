@@ -10,7 +10,7 @@ import threading
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ import viser
 import viser.extras
 from loguru import logger
 
+from robots_realtime.core.observation import Observation
 from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_pad
 
 
@@ -113,21 +114,31 @@ class ViserMonitor:
     #  Public API
     # ------------------------------------------------------------------ #
 
-    def update(self, obs: Dict[str, Any]) -> None:
+    def update(self, obs: Any) -> None:
         """Feed a new observation into the monitor (thread-safe).
+
+        Accepts either a typed ``Observation`` (from the main process) or a
+        plain dict (when embedded inside an agent subprocess via portal RPC).
 
         Extracts RGB images, updates the Viser GUI thumbnails, updates URDF
         joint visualization, and writes video frames when recording.
         """
         # --- URDF visualization ---
         if self._urdf_vis_left is not None:
-            left = obs.get("left")
-            if isinstance(left, dict) and "joint_pos" in left:
-                self._urdf_vis_left.update_cfg(np.flip(left["joint_pos"][:6]))
-            if self._bimanual and self._urdf_vis_right is not None:
+            if isinstance(obs, Observation):
+                left = obs.arms.get("left")
+                left_jp = left.joint_pos if left is not None else None
+                right_data = obs.arms.get("right")
+                right_jp = right_data.joint_pos if right_data is not None else None
+            else:
+                left = obs.get("left")
+                left_jp = left["joint_pos"] if isinstance(left, dict) and "joint_pos" in left else None
                 right = obs.get("right")
-                if isinstance(right, dict) and "joint_pos" in right:
-                    self._urdf_vis_right.update_cfg(np.flip(right["joint_pos"][:6]))
+                right_jp = right["joint_pos"] if isinstance(right, dict) and "joint_pos" in right else None
+            if left_jp is not None:
+                self._urdf_vis_left.update_cfg(np.flip(left_jp[:6]))
+            if self._bimanual and self._urdf_vis_right is not None and right_jp is not None:
+                self._urdf_vis_right.update_cfg(np.flip(right_jp[:6]))
 
         # --- Camera feeds ---
         rgb_images = obs_get_rgb(obs)

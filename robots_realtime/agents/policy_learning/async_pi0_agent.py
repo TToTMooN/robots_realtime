@@ -1,19 +1,39 @@
 import threading
 import time
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple
 
 import numpy as np
 from dm_env.specs import Array
 from openpi_client import action_chunk_broker, image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
 from openpi_client.runtime.agents import policy_agent as _policy_agent
-from robots_realtime.data.data_utils import recusive_flatten
-from robots_realtime.learning.diffusion_policy.policy_network import ModelConfig
 
 from robots_realtime.agents.agent import PolicyAgent
 from robots_realtime.agents.constants import ActionSpec
 from robots_realtime.robots.utils import Rate
 from robots_realtime.utils.portal_utils import remote
+
+
+@dataclass
+class ModelConfig:
+    """Minimal config describing which observation keys map to actions/MLP/images."""
+
+    action_keys: Tuple[str, ...] = ()
+    mlp_keys: Tuple[str, ...] = ()
+    image_keys: Tuple[str, ...] = ()
+
+
+def _recursive_flatten(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+    """Flatten a nested dict with ``-`` as the separator."""
+    flat: Dict[str, Any] = {}
+    for k, v in d.items():
+        key = f"{prefix}-{k}" if prefix else k
+        if isinstance(v, dict):
+            flat.update(_recursive_flatten(v, key))
+        else:
+            flat[key] = v
+    return flat
 
 
 class AsyncDiffusionAgent(PolicyAgent):
@@ -88,7 +108,7 @@ class AsyncDiffusionAgent(PolicyAgent):
 
     def obs_to_model_input(self, obs):
         flat_obs = []
-        obs = recusive_flatten(obs)
+        obs = _recursive_flatten(obs)
         for k in self.config.mlp_keys:
             flat_obs.append(obs[k])
         flat_obs = np.concatenate(flat_obs, axis=-1)
