@@ -16,10 +16,20 @@
 #   - screen installed on the remote (sudo apt install screen)
 
 REMOTE_USER="cat"
-REMOTE_HOST="${1:-10.42.0.1}"
 REMOTE_SCRIPT="gello_position_server.py"
 LOCAL_SCRIPT="scripts/gello_position_server.py"
 SCREEN_NAME="gello_server"
+
+KILL_ONLY=false
+REMOTE_HOST="10.42.0.1"
+for arg in "$@"; do
+    if [[ "$arg" == "--kill" ]]; then
+        KILL_ONLY=true
+    else
+        REMOTE_HOST="$arg"
+    fi
+done
+
 SSH="ssh -o ConnectTimeout=5 -o BatchMode=yes ${REMOTE_USER}@${REMOTE_HOST}"
 
 remote_kill() {
@@ -28,7 +38,7 @@ remote_kill() {
     return 0
 }
 
-if [[ "${1:-}" == "--kill" ]]; then
+if $KILL_ONLY; then
     echo "Killing gello_position_server on ${REMOTE_USER}@${REMOTE_HOST} ..."
     remote_kill
     echo "Done."

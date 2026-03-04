@@ -79,7 +79,7 @@ class Rate:
                 f"Behind schedule {self.rate_name} by {overrun:.4f}s "
                 f"(tolerance {self.warn_tolerance}s)"
             )
-        elif overrun <= 0:
+        else:
             needed_sleep = max(0, self.last + self.dt - time.time() - 0.0001)
             time.sleep(needed_sleep)
         self._first = False
