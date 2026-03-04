@@ -86,6 +86,7 @@ launch.py
 | Point cloud utils | `utils/depth_utils.py`, `sensors/cameras/camera_utils.py` | Depth obs |
 | Portal RPC | `utils/portal_utils.py` | Multi-process coordination |
 | Config system | `envs/configs/loader.py`, `instantiate.py` | Launch infra |
+| JoyCon gripper | `input_devices/joycon_gripper_reader.py` | Gripper control during GELLO teleop |
 | Scripts | `scripts/test_*.py` | Hardware diagnostics |
 
 ## What to Remove (Refactor Targets)
@@ -101,7 +102,6 @@ launch.py
 | MJLab sim | `robots/mjlab_sim_robot.py`, `robots/yam_pick_red_cube_sim_robot.py` | Sim only |
 | Sim agents | `agents/teleoperation/gello_leader_agent.py`, `bilateral_leader_agent.py` | Sim-only patterns |
 | Sim configs | `configs/yam/yam_gello_mujoco_sim.yaml`, `yam_gello_mjlab_sim.yaml`, `yam_gello_pick_red_cube_sim.yaml`, `yam_bilateral_mjlab_sim.yaml` | Sim only |
-| JoyCon input | `input_devices/joycon_gripper_reader.py` | Unused |
 
 ---
 
